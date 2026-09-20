@@ -186,8 +186,11 @@ function render() {
   const raw = span / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
   const stepY = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
   const y0 = Math.floor(Math.min(...ys) / stepY) * stepY;
-  const y1 = Math.ceil(Math.max(...ys) / stepY) * stepY;
+  // 全点が同値だと目盛りが1本しか出ないので1段ぶん広げる
+  const y1 = Math.max(Math.ceil(Math.max(...ys) / stepY) * stepY, y0 + stepY);
   const dec = Math.max(0, -Math.floor(Math.log10(stepY)));
+  // 丸め誤差で "-0.0" にならないようゼロに寄せる（マイナス金利期に出る）
+  const tickText = v => (Math.abs(v) < stepY / 1e6 ? 0 : v).toFixed(dec);
   const X = t => m.l + (x1 === x0 ? 0 : (t - x0) / (x1 - x0)) * iw;
   const Y = v => m.t + ih - (v - y0) / (y1 - y0 || 1) * ih;
 
@@ -196,7 +199,7 @@ function render() {
   for (let v = y0; v <= y1 + 1e-9; v += stepY) {
     const y = Y(v);
     g.push(`<line x1="${m.l}" y1="${y.toFixed(1)}" x2="${W - m.r}" y2="${y.toFixed(1)}" stroke="${C('--grid')}" stroke-width="1"/>`);
-    g.push(`<text x="${m.l - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="${C('--text-muted')}">${v.toFixed(dec)}</text>`);
+    g.push(`<text x="${m.l - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="${C('--text-muted')}">${tickText(v)}</text>`);
   }
   const yearsSpan = (x1 - x0) / (365.25 * 864e5);
   const step = yearsSpan > 40 ? 10 : yearsSpan > 16 ? 5 : yearsSpan > 6 ? 2 : 1;
