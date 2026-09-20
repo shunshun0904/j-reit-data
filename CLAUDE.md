@@ -28,23 +28,26 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   `tests/test_model.py`（符号割れ判定と2因子分岐）。Python 3.11 / pandas 3.0 / semopy 2.3.11 で確認
 - 動作確認済み: 2因子モデル分岐（`model.fit_with_sign_branch`）。`--opposite` で自動的に2因子へ落ちる
 - 未確認: `ingest/dpu_history.py` の取得元ページの表構造。`--inspect` で確認してからパーサを固定する
-- 未確認: Actions ランナーから JAPAN-REIT.COM に到達できるか。
-  `.github/workflows/inspect-sources.yml` を実行するまで不明
-- 未実装: J-Quants 取得（価格・分配金・TRI）、10年国債利回り取得（財務省CSV）、
-  合併/上場廃止銘柄の復元（生存者バイアス対策）、日次スナップショット蓄積の Actions、
-  ダッシュボード
+- 未確認: Actions ランナーから JAPAN-REIT.COM / mof.go.jp に到達できるか。
+  `.github/workflows/inspect-sources.yml` / `inspect-jgb.yml` を実行するまで不明
+- 未確認: `ingest/jgb.py` の取得元 URL と CSV の実構造。パーサとテストは書いてあるが
+  実ファイルでは未検証。`--inspect` を通してから固定する
+- 未実装: J-Quants 取得（価格・分配金・TRI）、合併/上場廃止銘柄の復元（生存者バイアス対策）、
+  日次スナップショット蓄積の Actions、ダッシュボード
 
 ## 実行基盤
 - 開発セッションのネットワークポリシーが japan-reit.com / api.jquants.com / mof.go.jp を
   遮断している（プロキシが CONNECT に 403）。通るのは PyPI 等と GitHub のみ。
   そのため取得は GitHub Actions 側で回す方針
-- `.github/workflows/inspect-sources.yml` は手動実行のみ（workflow_dispatch）。
-  リポジトリが private でないと最初のステップで失敗する
+- ワークフローは手動実行のみ（workflow_dispatch）。スケジュール実行はしない
+  - `inspect-sources.yml` JAPAN-REIT.COM の表構造確認。リポジトリが public なので
+    出力は表のヘッダ名と行列数だけに限定する（転載・複製禁止のため）
+  - `inspect-jgb.yml` 財務省 CSV の構造確認
 
 ## 次のタスク（優先順）
 1. `python -m jreit_score.ingest.dpu_history 8985 --inspect` の結果でパーサを実構造に合わせる
 2. J-Quants V2 で REIT の日次四本値と分配金を取得し `features.build_outcomes` に渡す（APIキーは `JQUANTS_API_KEY`）
-3. 財務省の国債金利情報 CSV から 10年債利回りを取得
+3. `inspect-jgb` を実行し、結果で `ingest/jgb.py` のパーサを実構造に合わせる
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. Actions: 日次で JAPAN-REIT.COM スナップショット蓄積（生データはコミットしない）。派生 JSON のみ Pages へ
 
@@ -59,7 +62,7 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - `jreit_score/features.py` 目的変数の生成
 - `jreit_score/model.py` MIMIC 推定・スコア算出・サマリ
 - `jreit_score/validation.py` 時系列検証
-- `jreit_score/ingest/` 取得
+- `jreit_score/ingest/` 取得（`japan_reit.py` ランキング, `dpu_history.py` DPU, `jgb.py` 国債利回り）
 - `jreit_score/panel.py` 説明変数の整形
 - `jreit_score/synthetic.py` 合成データ
 
@@ -70,6 +73,7 @@ python run_local.py            # 合成データで全体を回す（1因子に�
 python run_local.py --opposite # 符号が割れるケース（2因子へ分岐する）
 PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_model.py
+PYTHONPATH=. python tests/test_jgb.py
 ```
 
 ## 会話上の約束

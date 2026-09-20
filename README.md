@@ -22,6 +22,9 @@
   （`data/japan_reit_ranking/asof=YYYY-MM-DD/part.parquet`）
 - `jreit_score/ingest/dpu_history.py` 銘柄別 DPU 履歴。取得元ページの表構造は未確認のため
   「決算期」「分配金」を含む表を自動検出する汎用パーサ。まず `--inspect` で表のヘッダを確認する
+- `jreit_score/ingest/jgb.py` 財務省「国債金利情報」CSV から国債利回りを取得する。
+  和暦（`S49.9.24` / `令和6年4月1日`）と西暦の両方、全角の年限列、欠損記号 `-` を吸収する。
+  取得元 URL と実構造は未検証のため、まず `--inspect` で確認すること
 - `jreit_score/panel.py` スナップショットを period ごとの説明変数（`PROTO_CAUSES`）に整形
 - `tests/test_ingest.py` ネットワーク無しでパーサを検証するフィクスチャ
 
@@ -29,8 +32,14 @@
 python -m jreit_score.ingest.japan_reit --out data
 python -m jreit_score.ingest.dpu_history 8985 8951 --source japan_reit --inspect
 python -m jreit_score.ingest.dpu_history 8985 8951 --source japan_reit --out data
+python -m jreit_score.ingest.jgb --source all --inspect
+python -m jreit_score.ingest.jgb --source all --out data
 PYTHONPATH=. python tests/test_ingest.py
+PYTHONPATH=. python tests/test_jgb.py
 ```
+
+開発セッションから japan-reit.com / api.jquants.com / mof.go.jp に到達できない場合は、
+`.github/workflows/inspect-sources.yml` / `inspect-jgb.yml` を手動実行して構造を確認する。
 
 利用規約: JAPAN-REIT.COM は転載・複製を禁じている。個人利用のプロトタイプに限定し、
 アクセス間隔を空け（2秒以上）、取得データはリポジトリにコミットしない（`data/` は .gitignore）。

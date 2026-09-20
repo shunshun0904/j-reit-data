@@ -1,0 +1,43 @@
+# 財務省「国債金利情報」CSV の実構造を確認する手動ワークフロー。
+#
+# 目的: CLAUDE.md の次タスク3。jreit_score/ingest/jgb.py のパーサは実ファイルで
+# 未検証なので、まずここで構造を確認してから固定する。
+#
+# 未検証: Actions ランナーから mof.go.jp に到達できるかは、実行するまで不明。
+#
+# 出力は先頭十数行とパース結果の要約のみ。財務省サイトは政府標準利用規約に基づく
+# 出典明記での利用を認めていると理解しているが、確認するまで全文はログに出さず、
+# CSV そのものもコミットしない（data/ は .gitignore）。
+name: inspect-jgb
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "取得対象"
+        required: false
+        default: current
+        type: choice
+        options: [current, all]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: パーサのフィクスチャ検証（取得前に通しておく）
+        run: PYTHONPATH=. python tests/test_jgb.py
+
+      - name: CSV の実構造を確認
+        run: PYTHONPATH=. python -m jreit_score.ingest.jgb --source '${{ inputs.source }}' --inspect

@@ -6,12 +6,9 @@
 #
 # 未検証: Actions ランナーから japan-reit.com に到達できるかは、実際に走らせるまで不明。
 #
-# 安全側の制約:
-# - workflow_dispatch のみ。スケジュール実行はしない
-# - リポジトリが private でない限り最初のステップで失敗する
-#   （JAPAN-REIT.COM は転載・複製禁止。public だと Actions ログが公開される）
-# - 既定ではヘッダと行列数だけを出す。HTML の保存は dump_html を明示した時だけ
-# - 取得データはコミットしない（data/ は .gitignore）
+# このリポジトリは public なので Actions のログも公開される。
+# JAPAN-REIT.COM は転載・複製禁止のため、出力は表のヘッダ名と行列数だけに限定する。
+# ページ本文・データ行・HTML は一切ログにも artifact にも出さない。
 name: inspect-sources
 
 on:
@@ -31,11 +28,6 @@ on:
         description: "銘柄間の待機秒数（2 以上）"
         required: false
         default: "2"
-      dump_html:
-        description: "取得した HTML を artifact に保存する（private 前提）"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -44,31 +36,24 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: リポジトリが public なら中止
+      - name: 入力チェック
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CODES: ${{ inputs.codes }}
+          SLEEP: ${{ inputs.sleep }}
         run: |
           set -euo pipefail
-          vis=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
-                     -H "Accept: application/vnd.github+json" \
-                     "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
-                | python3 -c 'import json,sys; print(json.load(sys.stdin)["visibility"])')
-          echo "visibility=$vis"
-          if [ "$vis" != "private" ]; then
-            echo "::error::リポジトリが $vis です。JAPAN-REIT.COM は転載・複製禁止で、public だと実行ログが公開されます。private にしてから再実行してください。"
-            exit 1
-          fi
-
-      - name: 待機秒数の下限チェック
-        run: |
-          set -euo pipefail
-          python3 -c "
-          import sys
-          s = float('''${{ inputs.sleep }}''')
-          if s < 2:
-              sys.exit('アクセス間隔は 2 秒以上にしてください（指定: %s）' % s)
-          print('sleep=%s' % s)
-          "
+          python3 - <<'PY'
+          import os, re, sys
+          codes = os.environ["CODES"].split()
+          if not codes or len(codes) > 10:
+              sys.exit(f"銘柄コードは 1〜10 件にしてください（指定: {len(codes)} 件）")
+          bad = [c for c in codes if not re.fullmatch(r"[0-9A-Z]{4}", c)]
+          if bad:
+              sys.exit(f"銘柄コードの形式が不正です: {bad}")
+          if float(os.environ["SLEEP"]) < 2:
+              sys.exit("アクセス間隔は 2 秒以上にしてください")
+          print("codes=%s sleep=%s" % (codes, os.environ["SLEEP"]))
+          PY
 
       - uses: actions/checkout@v4
 
@@ -83,41 +68,11 @@ jobs:
         run: PYTHONPATH=. python tests/test_ingest.py
 
       - name: DPU 履歴ページの表構造を確認
-        run: |
-          set -euo pipefail
-          PYTHONPATH=. python -m jreit_score.ingest.dpu_history \
-            ${{ inputs.codes }} --source '${{ inputs.source }}' \
-            --inspect --sleep '${{ inputs.sleep }}'
-
-      - name: HTML を保存（任意）
-        if: ${{ inputs.dump_html }}
-        run: |
-          set -euo pipefail
-          sleep '${{ inputs.sleep }}'
-          mkdir -p artifacts
-          PYTHONPATH=. python - <<'PY'
-          import os, time, pathlib, requests
-          from jreit_score.ingest.dpu_history import SOURCES, UA
-          codes = os.environ["CODES"].split()
-          src, gap = os.environ["SOURCE"], float(os.environ["SLEEP"])
-          s, out = requests.Session(), pathlib.Path("artifacts")
-          for i, c in enumerate(codes):
-              if i:
-                  time.sleep(gap)
-              r = s.get(SOURCES[src].format(code=c), headers={"User-Agent": UA}, timeout=30)
-              r.raise_for_status()
-              r.encoding = r.apparent_encoding
-              (out / f"{src}_{c}.html").write_text(r.text, encoding="utf-8")
-              print(f"saved {src}_{c}.html ({len(r.text)} chars)")
-          PY
         env:
           CODES: ${{ inputs.codes }}
           SOURCE: ${{ inputs.source }}
           SLEEP: ${{ inputs.sleep }}
-
-      - uses: actions/upload-artifact@v4
-        if: ${{ inputs.dump_html }}
-        with:
-          name: source-html
-          path: artifacts/
-          retention-days: 1
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python -m jreit_score.ingest.dpu_history \
+            $CODES --source "$SOURCE" --inspect --sleep "$SLEEP"
