@@ -13,6 +13,9 @@
   全期間分は BASE 直下ではなく `data/jgbcm_all.csv`（リンク文字列「過去の金利情報
   （昭和49年（1974年）～）」）。BASE 直下の `jgbcm_all.csv` は 404 になる。
   取得先は `--list` で一覧ページから確認する（推測しない）。
+  all は 13,290 行 / 1974-09-24〜2026-08-31、年限15本。10年列の非欠損は 9,929 件で、
+  初期の期間は 10年 が空欄（`tenor` が dropna するので下流には渡らない）。
+  all は当月分を含まないため、全期間が必要なら `fetch_full` で current と結合する。
 
 パーサは構造を決め打ちせず「基準日」を含む行をヘッダとして自動検出する。
 新しい取得先を使う前には `--inspect` を通すこと。
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -162,8 +166,34 @@ def fetch_jgb_csv(source: str = "current", session: requests.Session | None = No
 
 def fetch_jgb10(source: str = "current", session: requests.Session | None = None,
                 url: str | None = None) -> pd.DataFrame:
-    """10年債利回りを [date, yield] で返す."""
+    """単一ソースから10年債利回りを [date, yield] で返す."""
     return tenor(parse_jgb_csv(fetch_jgb_csv(source, session, url)), "10年")
+
+
+def combine(past: pd.DataFrame, current: pd.DataFrame) -> pd.DataFrame:
+    """過去分と当月分を結合する. 日付が重なる場合は当月分を優先する."""
+    df = pd.concat([past, current], ignore_index=True)
+    return (df.sort_values("date")
+              .drop_duplicates(subset="date", keep="last")
+              .reset_index(drop=True))
+
+
+def fetch_full(session: requests.Session | None = None, sleep_sec: float = 2.0) -> pd.DataFrame:
+    """全期間の利回りパネル (wide) を返す.
+
+    `all` は前月末までで当月分を含まないため、`current` を重ねる必要がある
+    （確認 2026-09-20: all は 1974-09-24〜2026-08-31、current は 2026-09-01 以降）。
+    """
+    s = session or requests.Session()
+    past = parse_jgb_csv(fetch_jgb_csv("all", s))
+    time.sleep(sleep_sec)  # サイト負荷配慮
+    return combine(past, parse_jgb_csv(fetch_jgb_csv("current", s)))
+
+
+def fetch_jgb10_full(session: requests.Session | None = None,
+                     sleep_sec: float = 2.0) -> pd.DataFrame:
+    """全期間の10年債利回りを [date, yield] で返す（features.build_outcomes の入力）."""
+    return tenor(fetch_full(session, sleep_sec), "10年")
 
 
 def save(df: pd.DataFrame, root: Path, name: str = "jgb.parquet") -> Path:
@@ -197,7 +227,8 @@ def inspect(text: str, n_lines: int = 12) -> str:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=list(SOURCES), default="current")
+    ap.add_argument("--source", choices=list(SOURCES) + ["full"], default="current",
+                    help="full は all と current を結合する")
     ap.add_argument("--url", help="SOURCES に無い CSV を直接指定する（--list で調べた URL）")
     ap.add_argument("--list", action="store_true", dest="list_links",
                     help="一覧ページから .csv へのリンクを列挙する")
@@ -210,6 +241,12 @@ if __name__ == "__main__":
         print(f"{BASE} の CSV リンク {len(links)} 件")
         for url, text in links:
             print(f"  {url}  ({text})")
+        raise SystemExit(0)
+    if a.source == "full" and not a.url:
+        df = tenor(fetch_full(), a.tenor)
+        print(f"saved {len(df)} rows ({df['date'].min().date()} 〜 {df['date'].max().date()})"
+              f" -> {save(df, Path(a.out))}")
+        print(df.tail())
         raise SystemExit(0)
     text = fetch_jgb_csv(a.source, url=a.url)
     if a.inspect:

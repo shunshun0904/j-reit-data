@@ -7,8 +7,8 @@
 import numpy as np
 import pandas as pd
 
-from jreit_score.ingest.jgb import (find_header_row, inspect, parse_jgb_csv,
-                                    parse_jp_date, tenor)
+from jreit_score.ingest.jgb import (combine, find_header_row, inspect,
+                                    parse_jgb_csv, parse_jp_date, tenor)
 
 # 想定構造（未検証）: 前書き数行 → 「基準日」ヘッダ → 和暦の日付と年限別利回り、欠損は '-'
 CSV = """国債金利情報
@@ -65,6 +65,27 @@ def test_tenor_extraction_matches_features_input_shape():
     assert list(j.columns) == ["date", "yield"]
     assert len(j) == 5 and j["yield"].notna().all()
     assert j["yield"].iloc[-1] == 0.735
+
+
+def test_tenor_drops_rows_missing_that_tenor():
+    """要求した年限が欠損している行は落とす（10年は揃っていても1年は欠損しうる）."""
+    df = parse_jgb_csv(CSV)
+    assert len(tenor(df, "10年")) == 5
+    assert len(tenor(df, "1年")) == 4          # S49.9.24 は 1年 が '-'
+    assert tenor(df, "1年")["date"].min() == pd.Timestamp("1998-04-01")
+
+
+def test_combine_prefers_current_on_overlap():
+    """all は当月分を含まないので current を重ねる。重複日は current を採用する."""
+    past = pd.DataFrame({"date": pd.to_datetime(["2026-08-30", "2026-08-31"]),
+                         "yield": [2.9, 3.0]})
+    cur = pd.DataFrame({"date": pd.to_datetime(["2026-08-31", "2026-09-01"]),
+                        "yield": [3.05, 3.1]})
+    out = combine(past, cur)
+    assert len(out) == 3
+    assert out["date"].is_monotonic_increasing
+    assert out.loc[out["date"] == pd.Timestamp("2026-08-31"), "yield"].iloc[0] == 3.05
+    assert out["yield"].tolist() == [2.9, 3.05, 3.1]
 
 
 def test_fullwidth_columns_and_western_dates():

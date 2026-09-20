@@ -24,7 +24,10 @@
   「決算期」「分配金」を含む表を自動検出する汎用パーサ。まず `--inspect` で表のヘッダを確認する
 - `jreit_score/ingest/jgb.py` 財務省「国債金利情報」CSV から国債利回りを取得する。
   和暦（`S49.9.24` / `令和6年4月1日`）と西暦の両方、全角の年限列、欠損記号 `-` を吸収する。
-  取得元 URL と実構造は未検証のため、まず `--inspect` で確認すること
+  - 当月分 `jgbcm.csv` / 過去分 `data/jgbcm_all.csv`（1974-09-24〜、13,290行、年限15本）
+  - 過去分は当月を含まないため `fetch_jgb10_full()` が両方を結合して
+    `[date, yield]` を返す（`features.build_outcomes` の `jgb10` 入力）
+  - 取得先は `--list` で一覧ページから確認する。URL を推測しない
 - `jreit_score/panel.py` スナップショットを period ごとの説明変数（`PROTO_CAUSES`）に整形
 - `tests/test_ingest.py` ネットワーク無しでパーサを検証するフィクスチャ
 
@@ -32,8 +35,9 @@
 python -m jreit_score.ingest.japan_reit --out data
 python -m jreit_score.ingest.dpu_history 8985 8951 --source japan_reit --inspect
 python -m jreit_score.ingest.dpu_history 8985 8951 --source japan_reit --out data
+python -m jreit_score.ingest.jgb --list              # 取得先の一覧
 python -m jreit_score.ingest.jgb --source all --inspect
-python -m jreit_score.ingest.jgb --source all --out data
+python -m jreit_score.ingest.jgb --source full --out data   # all + current を結合
 PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_jgb.py
 ```
