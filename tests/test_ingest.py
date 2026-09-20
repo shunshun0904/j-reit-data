@@ -52,6 +52,26 @@ def test_find_dpu_rows_returns_none_when_absent():
     assert find_dpu_rows(RANK_HTML) is None
 
 
+# 銘柄ページには「分配金利回り」の表が DPU の表より先に出る（2026-09-20 に確認）。
+# 「分配金」を含むだけで拾うと利回りの表を誤って掴む。
+YIELD_FIRST_HTML = """
+<table><tr><td>投資口価格</td><td>x</td></tr>
+<tr><td>分配金利回り</td><td>y</td></tr></table>
+<table><tr><th>Unnamed: 0</th><th>前期</th><th>当期</th></tr>
+<tr><td>期末</td><td>2024年12月期</td><td>2025年12月期</td></tr>
+<tr><td>1口分配金</td><td>3,937</td><td>4,830</td></tr></table>"""
+
+
+def test_find_dpu_rows_skips_distribution_yield():
+    """「分配金利回り」は DPU ではないので掴まない."""
+    hit = find_dpu_rows(YIELD_FIRST_HTML)
+    assert hit is not None
+    t, label = hit
+    assert label == "1口分配金"
+    assert "利回り" not in label
+    assert list(t.columns) == ["Unnamed: 0", "前期", "当期"]
+
+
 def test_dpu():
     t = find_dpu_table(DPU_HTML)
     assert t is not None

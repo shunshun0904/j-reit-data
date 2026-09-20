@@ -4,9 +4,20 @@
 そのため「決算期」「分配金」を含む表を自動検出する汎用パーサにし、
 --inspect で全表のヘッダを表示して手元で当たりを付けられるようにしてある。
 
-候補URL（要確認）:
-  JAPAN-REIT.COM 銘柄ページ : https://www.japan-reit.com/meigara/{code}/
-  haitoukabu.com 銘柄ページ  : https://haitoukabu.com/reit/{code}.html
+確認済み（Actions 実行 2026-09-20, workflow inspect-sources, 銘柄 8985）:
+  https://www.japan-reit.com/meigara/{code}/ には表が6件ある。DPU は table 2
+    cols       = ['Unnamed: 0', '前期', '当期', '次期']
+    row_labels = ['期首', '期末', '営業収益', '当期利益', '1口分配金']
+  つまり期が列・項目が行の転置レイアウトで、期は「前期/当期/次期」の3つしかない。
+  うち次期は予想なので実績は2期分。`features.dpu_stability` は実績3期以上
+  （既定 window=6）を要求するため、このページだけでは DPU 履歴を作れない。
+  → 履歴の取得元は別途決める必要がある（未決）。
+
+  なお table 0 / table 1 の行ラベルにある「分配金利回り」は DPU ではないので、
+  行ラベル検出では `DPU_ROW_EXCLUDE` で除外している。
+
+候補URL（haitoukabu は未確認）:
+  haitoukabu.com 銘柄ページ : https://haitoukabu.com/reit/{code}.html
 """
 from __future__ import annotations
 
@@ -25,6 +36,9 @@ SOURCES = {
 }
 PERIOD_KEYS = ("決算期", "期", "決算")
 DPU_KEYS = ("分配金", "1口当たり", "１口当たり")
+# 行ラベル検出で DPU と紛らわしいもの。「分配金利回り」は DPU ではなく利回り
+DPU_ROW_EXCLUDE = ("利回り", "予想")
+PERIOD_END_KEYS = ("期末", "決算期")
 
 
 def _parse_period(s: str) -> pd.Timestamp | None:
@@ -59,13 +73,16 @@ def find_dpu_rows(html: str) -> tuple[pd.DataFrame, str] | None:
     期が列、項目が行ラベルになっている（2026-09-20 の inspect で確認）。
     返り値は (表, 分配金の行ラベル)。
     """
+    include = "|".join(map(re.escape, DPU_KEYS))
+    exclude = "|".join(map(re.escape, DPU_ROW_EXCLUDE))
     for t in pd.read_html(io.StringIO(html), flavor="lxml"):
         if t.shape[1] < 2:
             continue
         # pandas 3 の arrow 文字列型では NaN が float のまま渡るため、
         # fillna してからベクトル化した contains を使う
         labels = t.iloc[:, 0].astype("string").fillna("")
-        hit = labels[labels.str.contains("|".join(map(re.escape, DPU_KEYS)), regex=True)]
+        hit = labels[labels.str.contains(include, regex=True)
+                     & ~labels.str.contains(exclude, regex=True)]
         if len(hit):
             return t, str(hit.iloc[0])
     return None
