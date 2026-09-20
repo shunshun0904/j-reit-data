@@ -40,9 +40,24 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   - 当月分 `jgbcm.csv`、過去分 `data/jgbcm_all.csv`（BASE 直下の jgbcm_all.csv は 404）
   - all は 13,290 行 / 1974-09-24〜2026-08-31、年限15本、10年の非欠損 9,929 件
   - all は当月分を含まないので `fetch_jgb10_full` で current と結合する
-- 未確認・要APIキー: `ingest/jquants.py`。整形層（`to_prices` / `to_dpu`）は
-  フィクスチャで検証済みだが、API のベースURL・エンドポイント・認証ヘッダは未検証。
-  `JQUANTS_API_KEY` を Secrets に登録し `probe-jquants` を実行して確定させる
+- 一部確認済み: `ingest/jquants.py`。Actions で probe を4回実行した結果（2026-09-20）
+  - ランナーから api.jquants.com に到達できる
+  - ベースURLは `https://api.jquants.com` で正しい
+  - **V2 が生きている**。`/v2/...` は J-Quants 本体のルータに届き固有の
+    「エンドポイントが存在しない」応答を返す。`/v1/...` と `/` は API Gateway の
+    素の "Forbidden" でルート自体が未定義
+  - 認証ヘッダは `x-api-key` が有力。これを付けた `/v2/listed/info` は
+    認証エラーではなくパス不在を返した（パスが通っていないので未確定）
+  - APIキーは Secrets に `JQUANTS_API` として登録されている（`JQUANTS_API_KEY` でも可）
+  - 整形層（`to_prices` / `to_dpu`）はフィクスチャで検証済み
+  - **残る未確定は V2 のパス名だけ**。仕様ページ
+    （`https://jpx-jquants.com/ja/spec/migration-v1-v2` と `https://jpx-jquants.com/spec/`）は
+    非ブラウザの UA に 403 を返す。開発セッションからも egress プロキシが遮断する。
+    ブラウザ偽装はしない方針なので、人間が仕様ページを開いてパスと認証ヘッダを確認し、
+    `jquants.ENDPOINTS` / `AUTH_STYLES` に入れる
+- 注意: `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈し、
+  ヘッダ値の SHA-256 を Base64 にしてエラーに含めて返す。候補から削除済みで、
+  probe はエラーメッセージ中の長い Base64 塊を伏せ字にしてから出力する
 - 未実装: 合併/上場廃止銘柄の復元（生存者バイアス対策）、
   日次スナップショット蓄積の Actions、ダッシュボード
 
@@ -64,8 +79,9 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 ## 次のタスク（優先順）
 1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
    （候補: J-Quants V2 の分配金、TDnet/EDINET、haitoukabu.com。いずれも未確認）
-2. `JQUANTS_API_KEY` を Secrets に登録 → `probe-jquants` を実行 → 通った組み合わせで
-   `ingest/jquants.py` の取得を固定し、価格と分配金を `features.build_outcomes` に渡す
+2. 仕様ページで V2 のパス名（上場銘柄一覧・日次株価・分配金）と認証ヘッダを確認 →
+   `jquants.ENDPOINTS` に入れて `probe-jquants` を実行 → 通った組み合わせで取得を固定し、
+   価格と分配金を `features.build_outcomes` に渡す
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. Actions: 日次で JAPAN-REIT.COM スナップショット蓄積（生データはコミットしない）。派生 JSON のみ Pages へ
