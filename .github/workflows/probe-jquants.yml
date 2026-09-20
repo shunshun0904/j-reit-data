@@ -56,11 +56,13 @@ jobs:
       - name: 整形層のフィクスチャ検証（取得前に通しておく）
         run: PYTHONPATH=. python tests/test_jquants.py
 
+      # 仕様ページは UA で弾かれることがある（2026-09-20 に 403）。
+      # ここで止まると probe が走らないので、失敗しても続行する。
       - name: 仕様ページからエンドポイントを列挙
+        continue-on-error: true
         run: PYTHONPATH=. python -m jreit_score.ingest.jquants --spec
 
       - name: エンドポイントと認証ヘッダの総当たり
-        continue-on-error: true
         env:
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           JQUANTS_API: ${{ secrets.JQUANTS_API }}
