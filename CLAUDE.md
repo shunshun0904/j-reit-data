@@ -27,13 +27,16 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - 動作確認済み: `run_local.py`（合成データで end-to-end）, `tests/test_ingest.py`（パーサのフィクスチャ検証）,
   `tests/test_model.py`（符号割れ判定と2因子分岐）。Python 3.11 / pandas 3.0 / semopy 2.3.11 で確認
 - 動作確認済み: 2因子モデル分岐（`model.fit_with_sign_branch`）。`--opposite` で自動的に2因子へ落ちる
-- 未確認: `ingest/dpu_history.py` の取得元ページの表構造。`--inspect` で確認してからパーサを固定する
+- 確認済み・要方針変更: `ingest/dpu_history.py` の取得元。Actions で 8985 を確認した結果、
+  JAPAN-REIT.COM の銘柄ページは DPU を持つが「前期/当期/次期」の3期分しかない
+  （table 2: cols=['Unnamed: 0','前期','当期','次期'],
+    row_labels=['期首','期末','営業収益','当期利益','1口分配金']）。
+  次期は予想なので実績は2期。`features.dpu_stability` は実績3期以上（既定 window=6）を
+  要求するため、このページでは DPU 履歴を作れない。→ 取得元の決め直しが必要（未決）
 - 動作確認済み: `ingest/jgb.py`（財務省 国債金利情報）。Actions で実ファイルに対して検証した
   - 当月分 `jgbcm.csv`、過去分 `data/jgbcm_all.csv`（BASE 直下の jgbcm_all.csv は 404）
   - all は 13,290 行 / 1974-09-24〜2026-08-31、年限15本、10年の非欠損 9,929 件
   - all は当月分を含まないので `fetch_jgb10_full` で current と結合する
-- 未確認: Actions ランナーから JAPAN-REIT.COM に到達できるか。
-  `.github/workflows/inspect-sources.yml` を実行するまで不明
 - 未実装: J-Quants 取得（価格・分配金・TRI）、合併/上場廃止銘柄の復元（生存者バイアス対策）、
   日次スナップショット蓄積の Actions、ダッシュボード
 
@@ -41,19 +44,20 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - 開発セッションのネットワークポリシーが japan-reit.com / api.jquants.com / mof.go.jp を
   遮断している（プロキシが CONNECT に 403）。通るのは PyPI 等と GitHub のみ。
   そのため取得は GitHub Actions 側で回す方針
-- 確認済み: Actions ランナーからは mof.go.jp に到達できる（2026-09-20 実行）。
-  japan-reit.com / api.jquants.com は未確認
+- 確認済み: Actions ランナーからは mof.go.jp と japan-reit.com に到達できる（2026-09-20 実行）。
+  api.jquants.com は未確認
 - 取得先 URL は推測しない。`--list` のように一覧ページからリンクを列挙して確定する
   （`jgbcm_all.csv` を推測したところ 404 で、正しくは `data/jgbcm_all.csv` だった）
 - ワークフローは手動実行のみ（workflow_dispatch）。スケジュール実行はしない
   - `inspect-sources.yml` JAPAN-REIT.COM の表構造確認。リポジトリが public なので
-    出力は表のヘッダ名と行列数だけに限定する（転載・複製禁止のため）
+    出力は表のヘッダ名・行ラベル・行列数だけに限定する（転載・複製禁止のため）。数値セルは出さない
   - `inspect-jgb.yml` 財務省 CSV の構造確認
 
 ## 次のタスク（優先順）
-1. `python -m jreit_score.ingest.dpu_history 8985 --inspect` の結果でパーサを実構造に合わせる
+1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
+   （候補: J-Quants V2 の分配金、TDnet/EDINET、haitoukabu.com。いずれも未確認）
 2. J-Quants V2 で REIT の日次四本値と分配金を取得し `features.build_outcomes` に渡す（APIキーは `JQUANTS_API_KEY`）
-3. 完了。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
+3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. Actions: 日次で JAPAN-REIT.COM スナップショット蓄積（生データはコミットしない）。派生 JSON のみ Pages へ
 
