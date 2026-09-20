@@ -50,8 +50,15 @@ AUTH_STYLES: dict[str, callable] = {
     "bearer": lambda k: {"Authorization": f"Bearer {k}"},
     "x-api-key": lambda k: {"x-api-key": k},
 }
-# 仕様ページ。API 自身が 403 の message で指してきた URL
-SPEC_URL = "https://jpx-jquants.com/spec/"
+# 仕様ページの候補。1つ目はユーザ提供の V1→V2 移行ガイド。
+# 2つ目は API 自身が 403 の message で指してきた URL（素の UA には 403 を返した）
+SPEC_URLS = [
+    "https://jpx-jquants.com/ja/spec/migration-v1-v2",
+    "https://jpx-jquants.com/spec/",
+]
+# 認証ヘッダ名の手がかりとして探す語
+AUTH_HINTS = ("x-api-key", "X-API-KEY", "Authorization", "idToken", "refreshToken",
+              "Bearer", "APIキー", "api_key", "apikey")
 
 # probe で試すパス。`--spec` で列挙した結果をここに入れて絞り込む
 ENDPOINTS: dict[str, str] = {
@@ -80,32 +87,35 @@ def redact(text: str) -> str:
     return _B64.sub("<redacted>", text)
 
 
-def spec_paths(session: requests.Session | None = None) -> tuple[list[str], list[str]]:
-    """仕様ページからエンドポイントのパスと、仕様ファイルへのリンクを列挙する.
+def spec_from(url: str, session: requests.Session | None = None) -> dict:
+    """1つの仕様ページから, エンドポイントのパス・認証の手がかり・仕様ファイルを抽出する.
 
-    パスを推測しないためのもの。返り値は (パス候補, 仕様ファイルのURL)。
+    パスを推測しないためのもの。ブラウザの偽装はしない（UA は正直に名乗る）。
     """
     from urllib.parse import urljoin
 
-    import lxml.html
-
     s = session or requests.Session()
-    r = s.get(SPEC_URL, headers={"User-Agent": "jreit-score-prototype/0.1"}, timeout=TIMEOUT)
-    r.raise_for_status()
-    r.encoding = r.apparent_encoding
-    paths = sorted({m.group(0) for m in re.finditer(r"/v\d+(?:/[A-Za-z0-9_\-]+){1,3}", r.text)})
-    files = []
     try:
-        doc = lxml.html.fromstring(r.text)
-        files = sorted({urljoin(SPEC_URL, a.get("href"))
-                        for a in doc.xpath("//a[@href]|//script[@src]")
-                        if (a.get("href") or a.get("src") or "").lower()
-                        .endswith((".json", ".yaml", ".yml"))})
-    except Exception:
-        pass
-    files += sorted({urljoin(SPEC_URL, m.group(0))
-                     for m in re.finditer(r"[\w./\-]+\.(?:json|yaml|yml)", r.text)})
-    return paths, sorted(set(files))
+        r = s.get(url, headers={"User-Agent": "jreit-score-prototype/0.1 (personal research)"},
+                  timeout=TIMEOUT)
+    except requests.RequestException as e:
+        return {"url": url, "status": type(e).__name__, "paths": [], "auth": [], "files": []}
+    if r.status_code != 200:
+        return {"url": url, "status": r.status_code, "paths": [], "auth": [], "files": []}
+    r.encoding = r.apparent_encoding
+    text = r.text
+    paths = sorted({m.group(0) for m in re.finditer(r"/v\d+(?:/[A-Za-z0-9_\-]+){1,3}", text)})
+    auth = sorted({h for h in AUTH_HINTS if h in text})
+    files = sorted({urljoin(url, m.group(0))
+                    for m in re.finditer(r"[\w./\-]+\.(?:json|yaml|yml)", text)})
+    return {"url": url, "status": 200, "paths": paths, "auth": auth,
+            "files": files[:20], "chars": len(text)}
+
+
+def spec_paths(session: requests.Session | None = None) -> list[dict]:
+    """候補の仕様ページを順に読み、結果を返す."""
+    s = session or requests.Session()
+    return [spec_from(u, s) for u in SPEC_URLS]
 
 
 @dataclass
@@ -240,14 +250,26 @@ if __name__ == "__main__":
                     help="候補のエンドポイントと認証ヘッダを総当たりして通るものを調べる")
     a = ap.parse_args()
     if a.spec:
-        paths, files = spec_paths()
-        print(f"{SPEC_URL} から抽出")
-        print(f"\nパス候補 {len(paths)} 件:")
-        for x in paths:
-            print(f"  {x}")
-        print(f"\n仕様ファイル {len(files)} 件:")
-        for x in files:
-            print(f"  {x}")
+        got = False
+        for res in spec_paths():
+            print(f"\n=== {res['url']}  status={res['status']} ===")
+            if res["status"] != 200:
+                continue
+            got = True
+            print(f"  取得サイズ: {res.get('chars')} 文字")
+            print(f"  認証の手がかり: {res['auth'] or 'なし'}")
+            print(f"  パス候補 {len(res['paths'])} 件:")
+            for x in res["paths"]:
+                print(f"    {x}")
+            if res["files"]:
+                print(f"  仕様ファイル {len(res['files'])} 件:")
+                for x in res["files"]:
+                    print(f"    {x}")
+        if not got:
+            raise SystemExit(
+                "どの仕様ページも取得できなかった。ブラウザ偽装はしないので、"
+                "人間が開いてパスと認証ヘッダを確認すること"
+            )
         raise SystemExit(0)
     if a.probe:
         results = probe()
