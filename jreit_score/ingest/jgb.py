@@ -10,8 +10,9 @@
     2行目以降: R8.9.1,1.527,1.802,...
   日付は和暦のドット区切り、年限は15本、値は % 単位。本モジュールのパーサで解釈できた。
 
-未確認: 全期間分の URL。`jgbcm_all.csv` は 404 だった（推測URLのため実在しない）。
-  `--list` で一覧ページからリンクを列挙して実在する取得先を特定すること。
+  全期間分は BASE 直下ではなく `data/jgbcm_all.csv`（リンク文字列「過去の金利情報
+  （昭和49年（1974年）～）」）。BASE 直下の `jgbcm_all.csv` は 404 になる。
+  取得先は `--list` で一覧ページから確認する（推測しない）。
 
 パーサは構造を決め打ちせず「基準日」を含む行をヘッダとして自動検出する。
 新しい取得先を使う前には `--inspect` を通すこと。
@@ -32,8 +33,11 @@ import requests
 
 UA = "Mozilla/5.0 (compatible; jreit-score-prototype/0.1; personal research)"
 BASE = "https://www.mof.go.jp/jgbs/reference/interest_rate/"
-# 実在を確認できたものだけを載せる。jgbcm_all.csv は 404 だったので入れない
-SOURCES = {"current": BASE + "jgbcm.csv"}
+# 実在を確認できたものだけを載せる（--list で一覧ページから確認した URL）
+SOURCES = {
+    "current": BASE + "jgbcm.csv",          # 当月分
+    "all": BASE + "data/jgbcm_all.csv",     # 過去分（昭和49年〜）。BASE 直下ではなく data/ 配下
+}
 
 HEADER_KEY = "基準日"
 # 和暦の元号 → 元年の前年（元号 n 年 = base + n 年）

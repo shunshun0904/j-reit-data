@@ -2,7 +2,7 @@
 #
 # 確認済み（run #1, 2026-09-20）: ランナーから mof.go.jp に到達でき、
 # jgbcm.csv（当月分）を jreit_score/ingest/jgb.py のパーサで解釈できた。
-# 未確認: 全期間分の URL。jgbcm_all.csv は 404 だったので mode=list で探す。
+# 確認済み（run #3）: 全期間分は data/jgbcm_all.csv（BASE 直下の jgbcm_all.csv は 404）。
 #
 # 出力は CSV リンク一覧、または先頭十数行とパース結果の要約のみ。
 # 財務省サイトは政府標準利用規約に基づく出典明記での利用を認めていると理解しているが、
@@ -23,7 +23,7 @@ on:
         required: false
         default: current
         type: choice
-        options: [current]
+        options: [current, all]
       url:
         description: "mode=inspect のとき、SOURCES に無い CSV を直接指定する"
         required: false
