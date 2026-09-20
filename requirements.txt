@@ -1,0 +1,8 @@
+pandas>=2.2
+numpy
+scipy
+statsmodels
+semopy>=2.3
+lxml
+requests
+pyarrow
