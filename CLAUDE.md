@@ -28,8 +28,18 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   `tests/test_model.py`（符号割れ判定と2因子分岐）。Python 3.11 / pandas 3.0 / semopy 2.3.11 で確認
 - 動作確認済み: 2因子モデル分岐（`model.fit_with_sign_branch`）。`--opposite` で自動的に2因子へ落ちる
 - 未確認: `ingest/dpu_history.py` の取得元ページの表構造。`--inspect` で確認してからパーサを固定する
+- 未確認: Actions ランナーから JAPAN-REIT.COM に到達できるか。
+  `.github/workflows/inspect-sources.yml` を実行するまで不明
 - 未実装: J-Quants 取得（価格・分配金・TRI）、10年国債利回り取得（財務省CSV）、
-  合併/上場廃止銘柄の復元（生存者バイアス対策）、GitHub Actions、ダッシュボード
+  合併/上場廃止銘柄の復元（生存者バイアス対策）、日次スナップショット蓄積の Actions、
+  ダッシュボード
+
+## 実行基盤
+- 開発セッションのネットワークポリシーが japan-reit.com / api.jquants.com / mof.go.jp を
+  遮断している（プロキシが CONNECT に 403）。通るのは PyPI 等と GitHub のみ。
+  そのため取得は GitHub Actions 側で回す方針
+- `.github/workflows/inspect-sources.yml` は手動実行のみ（workflow_dispatch）。
+  リポジトリが private でないと最初のステップで失敗する
 
 ## 次のタスク（優先順）
 1. `python -m jreit_score.ingest.dpu_history 8985 --inspect` の結果でパーサを実構造に合わせる

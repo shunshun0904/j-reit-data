@@ -104,9 +104,14 @@ if __name__ == "__main__":
     ap.add_argument("--source", choices=list(SOURCES), default="japan_reit")
     ap.add_argument("--inspect", action="store_true", help="表のヘッダ一覧だけ表示")
     ap.add_argument("--out", default="data")
+    ap.add_argument("--sleep", type=float, default=2.0, help="連続取得の間隔（秒）")
     a = ap.parse_args()
     if a.inspect:
-        for c in a.codes:
-            fetch_dpu(c, a.source, inspect=True)
+        # セッションを共有し, 銘柄間は必ず間隔を空ける（サイト負荷配慮）
+        s = requests.Session()
+        for i, c in enumerate(a.codes):
+            if i:
+                time.sleep(a.sleep)
+            fetch_dpu(c, a.source, session=s, inspect=True)
     else:
-        print(fetch_all(a.codes, a.source, Path(a.out)))
+        print(fetch_all(a.codes, a.source, Path(a.out), sleep_sec=a.sleep))
