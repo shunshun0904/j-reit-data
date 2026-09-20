@@ -1,7 +1,7 @@
 """ネットワーク無しでパーサを検証する（実ページ構造を模したフィクスチャ）."""
 import pandas as pd
 from jreit_score.ingest.japan_reit import parse_ranking_html
-from jreit_score.ingest.dpu_history import find_dpu_table, normalize
+from jreit_score.ingest.dpu_history import find_dpu_rows, find_dpu_table, normalize
 
 RANK_HTML = """
 <table><tr><th>順位</th><th>コード 投資法人名</th><th>価格騰落率</th><th>分配金利回り</th><th>NAV倍率</th>
@@ -30,6 +30,28 @@ def test_ranking():
     assert df.loc[0, "name"] == "日本ビルファンド"
 
 
+# 期が列・項目が行ラベルの転置レイアウト（JAPAN-REIT.COM 銘柄ページで確認した形）
+DPU_ROWS_HTML = """
+<table><tr><th>Unnamed: 0</th><th>前期</th><th>当期</th><th>次期</th></tr>
+<tr><td>決算期</td><td>2024年12月期</td><td>2025年12月期</td><td>2026年12月期</td></tr>
+<tr><td>1口当たり分配金</td><td>3,937</td><td>4,830</td><td>4,900</td></tr>
+<tr><td>当期純利益</td><td>100</td><td>110</td><td>120</td></tr></table>"""
+
+
+def test_find_dpu_rows_detects_transposed_layout():
+    """列名ではなく行ラベル側に分配金がある表を拾えること."""
+    assert find_dpu_table(DPU_ROWS_HTML) is None      # 列名検出では見つからない
+    hit = find_dpu_rows(DPU_ROWS_HTML)
+    assert hit is not None
+    t, label = hit
+    assert "分配金" in label
+    assert list(t.columns) == ["Unnamed: 0", "前期", "当期", "次期"]
+
+
+def test_find_dpu_rows_returns_none_when_absent():
+    assert find_dpu_rows(RANK_HTML) is None
+
+
 def test_dpu():
     t = find_dpu_table(DPU_HTML)
     assert t is not None
@@ -40,4 +62,8 @@ def test_dpu():
 
 
 if __name__ == "__main__":
-    test_ranking(); test_dpu(); print("ok")
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print(f"  {name} ok")
+    print("ok")

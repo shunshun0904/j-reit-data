@@ -37,6 +37,10 @@ def _parse_period(s: str) -> pd.Timestamp | None:
 
 
 def find_dpu_table(html: str) -> pd.DataFrame | None:
+    """「決算期」と「分配金」を列名に含む表を探す.
+
+    取得元により DPU が行ラベル側に来る場合があるため `find_dpu_rows` も併せて使う。
+    """
     tables = pd.read_html(io.StringIO(html), flavor="lxml")
     for t in tables:
         cols = [" ".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in t.columns]
@@ -45,6 +49,25 @@ def find_dpu_table(html: str) -> pd.DataFrame | None:
         if has_period and has_dpu and len(t) >= 3:
             t.columns = cols
             return t
+    return None
+
+
+def find_dpu_rows(html: str) -> tuple[pd.DataFrame, str] | None:
+    """分配金が「行」側に来ている表を探す（列が期、行が項目の転置レイアウト）.
+
+    JAPAN-REIT.COM の銘柄ページは `Unnamed: 0, 前期, 当期, 次期` のように
+    期が列、項目が行ラベルになっている（2026-09-20 の inspect で確認）。
+    返り値は (表, 分配金の行ラベル)。
+    """
+    for t in pd.read_html(io.StringIO(html), flavor="lxml"):
+        if t.shape[1] < 2:
+            continue
+        # pandas 3 の arrow 文字列型では NaN が float のまま渡るため、
+        # fillna してからベクトル化した contains を使う
+        labels = t.iloc[:, 0].astype("string").fillna("")
+        hit = labels[labels.str.contains("|".join(map(re.escape, DPU_KEYS)), regex=True)]
+        if len(hit):
+            return t, str(hit.iloc[0])
     return None
 
 
@@ -70,8 +93,17 @@ def fetch_dpu(code: str, source: str = "japan_reit", session: requests.Session |
     r.raise_for_status()
     r.encoding = r.apparent_encoding
     if inspect:
-        for i, t in enumerate(pd.read_html(io.StringIO(r.text), flavor="lxml")):
-            print(f"[{code} {source}] table {i}: shape={t.shape} cols={list(map(str, t.columns))[:8]}")
+        tables = pd.read_html(io.StringIO(r.text), flavor="lxml")
+        print(f"[{code} {source}] {url}: 表 {len(tables)} 件")
+        for i, t in enumerate(tables):
+            cols = [" ".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in t.columns]
+            # 行ラベル（先頭列）も出す。どの表が何かは列名だけでは分からないため。
+            # 数値セルは出さない（JAPAN-REIT.COM は転載・複製禁止）
+            labels = [str(v)[:24] for v in t.iloc[:, 0].tolist()[:8]]
+            print(f"  table {i}: shape={t.shape}")
+            print(f"    cols      : {cols[:10]}")
+            print(f"    row_labels: {labels}")
+        print(f"  find_dpu_table: {'該当あり' if find_dpu_table(r.text) is not None else '該当なし'}")
         return None
     t = find_dpu_table(r.text)
     return normalize(t, code) if t is not None else None
