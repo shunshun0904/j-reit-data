@@ -3,15 +3,18 @@
 `features.rate_resilience` が要求する `jgb10` (columns = [date, yield], yield は %)
 を作るのが目的。
 
-未検証: 取得元 URL と CSV の実構造はこの環境から到達できず確認できていない。
-そのため構造を決め打ちせず、「基準日」を含む行をヘッダとして自動検出する汎用
-パーサにし、`--inspect` で生の先頭行を表示して手元で当たりを付けられるようにしてある。
-パーサを固定する前に必ず `--inspect` を通すこと。
+確認済み（Actions 実行 2026-09-20, workflow inspect-jgb）:
+  jgbcm.csv は実在し当月分のみを返す。構造は
+    0行目: 国債金利情報 (令和8年9月),,,...,(単位 : %)
+    1行目: 基準日,1年,2年,3年,4年,5年,6年,7年,8年,9年,10年,15年,20年,25年,30年,40年
+    2行目以降: R8.9.1,1.527,1.802,...
+  日付は和暦のドット区切り、年限は15本、値は % 単位。本モジュールのパーサで解釈できた。
 
-候補URL（要確認）:
-  当年分   : https://www.mof.go.jp/jgbs/reference/interest_rate/jgbcm.csv
-  全期間分 : https://www.mof.go.jp/jgbs/reference/interest_rate/jgbcm_all.csv
-  一覧ページ: https://www.mof.go.jp/jgbs/reference/interest_rate/
+未確認: 全期間分の URL。`jgbcm_all.csv` は 404 だった（推測URLのため実在しない）。
+  `--list` で一覧ページからリンクを列挙して実在する取得先を特定すること。
+
+パーサは構造を決め打ちせず「基準日」を含む行をヘッダとして自動検出する。
+新しい取得先を使う前には `--inspect` を通すこと。
 
 利用条件（要確認）: 財務省サイトは政府標準利用規約に基づき出典明記での利用を認めて
 いると理解しているが、本プロジェクトでは確認するまで JAPAN-REIT.COM と同様に
@@ -29,7 +32,8 @@ import requests
 
 UA = "Mozilla/5.0 (compatible; jreit-score-prototype/0.1; personal research)"
 BASE = "https://www.mof.go.jp/jgbs/reference/interest_rate/"
-SOURCES = {"current": BASE + "jgbcm.csv", "all": BASE + "jgbcm_all.csv"}
+# 実在を確認できたものだけを載せる。jgbcm_all.csv は 404 だったので入れない
+SOURCES = {"current": BASE + "jgbcm.csv"}
 
 HEADER_KEY = "基準日"
 # 和暦の元号 → 元年の前年（元号 n 年 = base + n 年）
@@ -110,10 +114,39 @@ def tenor(df: pd.DataFrame, name: str = "10年") -> pd.DataFrame:
     return df[["date", cols[0]]].rename(columns={cols[0]: "yield"}).dropna().reset_index(drop=True)
 
 
-def fetch_jgb_csv(source: str = "all", session: requests.Session | None = None) -> str:
+def list_csv_links(session: requests.Session | None = None) -> list[tuple[str, str]]:
+    """一覧ページから .csv へのリンクを (絶対URL, リンク文字列) で列挙する.
+
+    全期間分の URL を推測で決め打ちしない（jgbcm_all.csv は 404 だった）。
+    実在する取得先はここで確認する。
+    """
+    from urllib.parse import urljoin
+
+    import lxml.html
+
+    s = session or requests.Session()
+    r = s.get(BASE, headers={"User-Agent": UA}, timeout=60)
+    r.raise_for_status()
+    r.encoding = r.apparent_encoding
+    doc = lxml.html.fromstring(r.text)
+    out, seen = [], set()
+    for a in doc.xpath("//a[@href]"):
+        href = a.get("href").strip()
+        if not href.lower().endswith(".csv"):
+            continue
+        url = urljoin(BASE, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        out.append((url, " ".join(a.text_content().split())[:60]))
+    return out
+
+
+def fetch_jgb_csv(source: str = "current", session: requests.Session | None = None,
+                  url: str | None = None) -> str:
     """CSV を文字列で取得する. 財務省 CSV は Shift_JIS 系のため cp932 を優先して復号する."""
     s = session or requests.Session()
-    r = s.get(SOURCES[source], headers={"User-Agent": UA}, timeout=60)
+    r = s.get(url or SOURCES[source], headers={"User-Agent": UA}, timeout=60)
     r.raise_for_status()
     for enc in ("cp932", "utf-8-sig", "utf-8"):
         try:
@@ -123,9 +156,10 @@ def fetch_jgb_csv(source: str = "all", session: requests.Session | None = None) 
     return r.content.decode(r.apparent_encoding or "cp932", errors="replace")
 
 
-def fetch_jgb10(source: str = "all", session: requests.Session | None = None) -> pd.DataFrame:
+def fetch_jgb10(source: str = "current", session: requests.Session | None = None,
+                url: str | None = None) -> pd.DataFrame:
     """10年債利回りを [date, yield] で返す."""
-    return tenor(parse_jgb_csv(fetch_jgb_csv(source, session)), "10年")
+    return tenor(parse_jgb_csv(fetch_jgb_csv(source, session, url)), "10年")
 
 
 def save(df: pd.DataFrame, root: Path, name: str = "jgb.parquet") -> Path:
@@ -159,12 +193,21 @@ def inspect(text: str, n_lines: int = 12) -> str:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=list(SOURCES), default="all")
+    ap.add_argument("--source", choices=list(SOURCES), default="current")
+    ap.add_argument("--url", help="SOURCES に無い CSV を直接指定する（--list で調べた URL）")
+    ap.add_argument("--list", action="store_true", dest="list_links",
+                    help="一覧ページから .csv へのリンクを列挙する")
     ap.add_argument("--inspect", action="store_true", help="生の先頭行と検出結果を表示する")
     ap.add_argument("--tenor", default="10年")
     ap.add_argument("--out", default="data")
     a = ap.parse_args()
-    text = fetch_jgb_csv(a.source)
+    if a.list_links:
+        links = list_csv_links()
+        print(f"{BASE} の CSV リンク {len(links)} 件")
+        for url, text in links:
+            print(f"  {url}  ({text})")
+        raise SystemExit(0)
+    text = fetch_jgb_csv(a.source, url=a.url)
     if a.inspect:
         print(inspect(text))
     else:

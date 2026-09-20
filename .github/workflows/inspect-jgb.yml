@@ -1,24 +1,33 @@
-# 財務省「国債金利情報」CSV の実構造を確認する手動ワークフロー。
+# 財務省「国債金利情報」CSV の実構造と取得先を確認する手動ワークフロー。
 #
-# 目的: CLAUDE.md の次タスク3。jreit_score/ingest/jgb.py のパーサは実ファイルで
-# 未検証なので、まずここで構造を確認してから固定する。
+# 確認済み（run #1, 2026-09-20）: ランナーから mof.go.jp に到達でき、
+# jgbcm.csv（当月分）を jreit_score/ingest/jgb.py のパーサで解釈できた。
+# 未確認: 全期間分の URL。jgbcm_all.csv は 404 だったので mode=list で探す。
 #
-# 未検証: Actions ランナーから mof.go.jp に到達できるかは、実行するまで不明。
-#
-# 出力は先頭十数行とパース結果の要約のみ。財務省サイトは政府標準利用規約に基づく
-# 出典明記での利用を認めていると理解しているが、確認するまで全文はログに出さず、
-# CSV そのものもコミットしない（data/ は .gitignore）。
+# 出力は CSV リンク一覧、または先頭十数行とパース結果の要約のみ。
+# 財務省サイトは政府標準利用規約に基づく出典明記での利用を認めていると理解しているが、
+# 確認するまで全文はログに出さず、CSV そのものもコミットしない（data/ は .gitignore）。
 name: inspect-jgb
 
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "list=一覧ページのCSVリンクを列挙 / inspect=CSVの構造を確認"
+        required: false
+        default: list
+        type: choice
+        options: [list, inspect]
       source:
-        description: "取得対象"
+        description: "mode=inspect のとき取得する対象"
         required: false
         default: current
         type: choice
-        options: [current, all]
+        options: [current]
+      url:
+        description: "mode=inspect のとき、SOURCES に無い CSV を直接指定する"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -39,5 +48,23 @@ jobs:
       - name: パーサのフィクスチャ検証（取得前に通しておく）
         run: PYTHONPATH=. python tests/test_jgb.py
 
+      - name: 一覧ページの CSV リンクを列挙
+        if: ${{ inputs.mode == 'list' }}
+        run: PYTHONPATH=. python -m jreit_score.ingest.jgb --list
+
       - name: CSV の実構造を確認
-        run: PYTHONPATH=. python -m jreit_score.ingest.jgb --source '${{ inputs.source }}' --inspect
+        if: ${{ inputs.mode == 'inspect' }}
+        env:
+          SOURCE: ${{ inputs.source }}
+          URL: ${{ inputs.url }}
+        run: |
+          set -euo pipefail
+          if [ -n "$URL" ]; then
+            case "$URL" in
+              https://www.mof.go.jp/*) ;;
+              *) echo "::error::URL は https://www.mof.go.jp/ 配下のみ許可します"; exit 1 ;;
+            esac
+            PYTHONPATH=. python -m jreit_score.ingest.jgb --url "$URL" --inspect
+          else
+            PYTHONPATH=. python -m jreit_score.ingest.jgb --source "$SOURCE" --inspect
+          fi
