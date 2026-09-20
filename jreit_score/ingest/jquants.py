@@ -8,7 +8,7 @@ JQUANTS_API_KEY 無しでも確認できていない。過去2回、URL を推�
 （財務省 `jgbcm_all.csv` は実際には `data/` 配下、JAPAN-REIT.COM の DPU 履歴表は存在せず）。
 そのため本モジュールは「候補を決め打ちしない」構成にしてある:
 
-  1. GitHub Secrets に `JQUANTS_API_KEY` を登録する
+  1. GitHub Secrets に `JQUANTS_API_KEY`（または `JQUANTS_API`）を登録する
   2. `probe` ワークフローを実行し、どの組み合わせが 200 を返すかをログで確認する
   3. 確認できた組み合わせだけを `ENDPOINTS` / `AUTH_STYLES` に残し、パーサを固定する
 
@@ -24,7 +24,8 @@ import pandas as pd
 import requests
 
 API_BASE = os.environ.get("JQUANTS_API_BASE", "https://api.jquants.com")
-KEY_ENV = "JQUANTS_API_KEY"
+# Secrets の登録名の揺れを吸収する（先に見つかった方を使う）
+KEY_ENVS = ("JQUANTS_API_KEY", "JQUANTS_API")
 TIMEOUT = 30
 
 # 候補（未検証）。probe で 200 を返したものだけを残す
@@ -43,14 +44,16 @@ ENDPOINTS: dict[str, str] = {
 }
 
 
-def api_key() -> str:
-    k = os.environ.get(KEY_ENV, "").strip()
-    if not k:
-        raise RuntimeError(
-            f"{KEY_ENV} が未設定。GitHub Secrets に登録してから実行すること。"
-            "（J-Quants のダッシュボード「設定 » APIキー」で取得）"
-        )
-    return k
+def api_key() -> tuple[str, str]:
+    """(キー, 採用した環境変数名) を返す. キーそのものはログに出さないこと."""
+    for name in KEY_ENVS:
+        k = os.environ.get(name, "").strip()
+        if k:
+            return k, name
+    raise RuntimeError(
+        f"APIキーが未設定。{' または '.join(KEY_ENVS)} を GitHub Secrets に登録すること。"
+        "（J-Quants のダッシュボード「設定 » APIキー」で取得）"
+    )
 
 
 @dataclass
@@ -94,9 +97,10 @@ def probe_one(path: str, auth: str, key: str, params: dict | None = None,
 
 def probe(session: requests.Session | None = None) -> list[ProbeResult]:
     """候補のエンドポイント × 認証ヘッダを総当たりし、どれが通るかを調べる."""
-    key, s = api_key(), session or requests.Session()
+    (key, env_name), s = api_key(), session or requests.Session()
+    print(f"使用する環境変数: {env_name}（値は出力しない, 長さ={len(key)}）")
     out = []
-    for name, path in ENDPOINTS.items():
+    for path in ENDPOINTS.values():
         for auth in AUTH_STYLES:
             out.append(probe_one(path, auth, key, session=s))
     return out
