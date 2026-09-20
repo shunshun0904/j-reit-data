@@ -30,18 +30,24 @@ TIMEOUT = 30
 
 # 候補（未検証）。probe で 200 を返したものだけを残す
 AUTH_STYLES: dict[str, callable] = {
+    "none": lambda k: {},          # 認証なし。403 がルート由来か認証由来かの判別に使う
     "bearer": lambda k: {"Authorization": f"Bearer {k}"},
     "x-api-key": lambda k: {"x-api-key": k},
     "authorization-raw": lambda k: {"Authorization": k},
 }
 ENDPOINTS: dict[str, str] = {
+    "root": "/",
     "listed_info_v2": "/v2/listed/info",
     "listed_info_v1": "/v1/listed/info",
-    "daily_quotes_v2": "/v2/prices/daily_quotes",
     "daily_quotes_v1": "/v1/prices/daily_quotes",
-    "dividend_v2": "/v2/fins/dividend",
     "dividend_v1": "/v1/fins/dividend",
 }
+# ベースURLの候補。JQUANTS_API_BASE で上書きできる
+BASE_CANDIDATES = [
+    "https://api.jquants.com",
+    "https://api.jquants.com/v1",
+    "https://api.jpx-jquants.com",
+]
 
 
 def api_key() -> tuple[str, str]:
@@ -63,24 +69,35 @@ class ProbeResult:
     status: int | str
     keys: list[str]
     n_records: int | None
+    message: str = ""     # エラー応答の message。ルート由来か認証由来かの判別に使う
+    base: str = ""
 
     def line(self) -> str:
         ok = "OK " if self.status == 200 else "   "
         n = "" if self.n_records is None else f" records={self.n_records}"
-        return f"  {ok}{self.endpoint:<16} auth={self.auth:<18} status={self.status}{n} keys={self.keys}"
+        msg = f' msg="{self.message}"' if self.message else ""
+        return (f"  {ok}{self.endpoint:<24} auth={self.auth:<18} "
+                f"status={self.status}{n} keys={self.keys}{msg}")
 
 
 def probe_one(path: str, auth: str, key: str, params: dict | None = None,
-              session: requests.Session | None = None) -> ProbeResult:
-    """1組み合わせを試す. 応答の中身は出さず、形だけを返す."""
+              session: requests.Session | None = None, base: str | None = None) -> ProbeResult:
+    """1組み合わせを試す.
+
+    データ本体は出さないが、エラー応答の `message` は出す。
+    403 がルート不在（API Gateway の "Missing Authentication Token"）なのか
+    認証失敗なのかは、これを見ないと区別できない。
+    """
     s = session or requests.Session()
+    b = base or API_BASE
     try:
-        r = s.get(API_BASE + path, headers=AUTH_STYLES[auth](key),
+        r = s.get(b + path, headers=AUTH_STYLES[auth](key),
                   params=params or {}, timeout=TIMEOUT)
     except requests.RequestException as e:
-        return ProbeResult(path, auth, type(e).__name__, [], None)
+        return ProbeResult(path, auth, type(e).__name__, [], None, base=b)
     keys: list[str] = []
     n: int | None = None
+    msg = ""
     if r.headers.get("content-type", "").startswith("application/json"):
         try:
             body = r.json()
@@ -88,21 +105,30 @@ def probe_one(path: str, auth: str, key: str, params: dict | None = None,
             body = None
         if isinstance(body, dict):
             keys = sorted(body)[:8]
-            for v in body.values():
-                if isinstance(v, list):
+            for k2, v in body.items():
+                if isinstance(v, list) and n is None:
                     n = len(v)
-                    break
-    return ProbeResult(path, auth, r.status_code, keys, n)
+            if r.status_code != 200:
+                raw = body.get("message") or body.get("error") or ""
+                msg = str(raw)[:160]
+    elif r.status_code != 200:
+        msg = r.text.strip()[:160].replace("\n", " ")
+    return ProbeResult(path, auth, r.status_code, keys, n, msg, b)
 
 
 def probe(session: requests.Session | None = None) -> list[ProbeResult]:
     """候補のエンドポイント × 認証ヘッダを総当たりし、どれが通るかを調べる."""
     (key, env_name), s = api_key(), session or requests.Session()
     print(f"使用する環境変数: {env_name}（値は出力しない, 長さ={len(key)}）")
+    bases = ([API_BASE] if os.environ.get("JQUANTS_API_BASE") else BASE_CANDIDATES)
     out = []
-    for path in ENDPOINTS.values():
-        for auth in AUTH_STYLES:
-            out.append(probe_one(path, auth, key, session=s))
+    for b in bases:
+        print(f"\n--- base={b} ---")
+        for path in ENDPOINTS.values():
+            for auth in AUTH_STYLES:
+                r = probe_one(path, auth, key, session=s, base=b)
+                print(r.line())
+                out.append(r)
     return out
 
 
@@ -166,13 +192,19 @@ if __name__ == "__main__":
                     help="候補のエンドポイントと認証ヘッダを総当たりして通るものを調べる")
     a = ap.parse_args()
     if a.probe:
-        print(f"base={API_BASE}")
         results = probe()
-        for r in results:
-            print(r.line())
         ok = [r for r in results if r.status == 200]
         print(f"\n200 を返した組み合わせ: {len(ok)} / {len(results)}")
+        for r in ok:
+            print("  " + r.line().strip())
         if not ok:
-            raise SystemExit("通る組み合わせが無い。APIキー・ベースURL・候補一覧を見直すこと")
+            msgs = sorted({r.message for r in results if r.message})
+            print("\n観測した message:")
+            for m in msgs:
+                print(f"  - {m}")
+            raise SystemExit(
+                "通る組み合わせが無い。message が 'Missing Authentication Token' なら"
+                "ルートが存在しない（パスの候補が誤り）。認証エラー文言ならキーの形式を見直す"
+            )
     else:
         ap.error("--probe を指定すること（取得の実装は probe の結果を見てから固定する）")

@@ -67,11 +67,16 @@ def test_empty_input_returns_empty_frame_with_right_columns():
     assert list(to_dpu([]).columns) == ["code", "period_end", "dpu"]
 
 
-def test_probe_result_line_does_not_leak_values():
-    r = ProbeResult("/v2/fins/dividend", "bearer", 200, ["dividend", "pagination_key"], 58)
-    line = r.line()
-    assert "OK" in line and "status=200" in line and "records=58" in line
-    assert "dividend" in line
+def test_probe_result_line_shows_status_and_message():
+    ok = ProbeResult("/v1/fins/dividend", "bearer", 200, ["dividend", "pagination_key"], 58)
+    assert "OK" in ok.line() and "status=200" in ok.line() and "records=58" in ok.line()
+    assert not ok.message                      # 200 のときは message を出さない
+
+    # 403 の原因がルート不在か認証失敗かは message を見ないと分からない
+    ng = ProbeResult("/v9/nope", "none", 403, ["message"], None,
+                     "Missing Authentication Token")
+    assert 'msg="Missing Authentication Token"' in ng.line()
+    assert "OK" not in ng.line()
 
 
 if __name__ == "__main__":
