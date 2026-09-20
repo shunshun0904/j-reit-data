@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>J-REIT 統合指標</title>
+<meta name="description" content="J-REIT の統合スコアを潜在因子モデルで推定するプロジェクトの公開ページ。現在は構築中で、接続済みの系列のみを表示しています。">
+<style>
+  :root {
+    color-scheme: light;
+    --plane:          #f9f9f7;
+    --surface-1:      #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --axis:           #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --status-ok:      #0ca30c;
+    --status-pending: #898781;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --plane:          #0d0d0d;
+      --surface-1:      #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --axis:           #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --status-ok:      #0ca30c;
+      --status-pending: #898781;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane:          #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --axis:           #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--plane); color: var(--text-primary);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .lede { color: var(--text-secondary); margin: 0 0 28px; font-size: 14px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-bottom: 20px;
+  }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .sub { color: var(--text-muted); font-size: 12px; margin: 0 0 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  button {
+    font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer;
+    background: transparent; color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 999px;
+  }
+  button[aria-pressed="true"] { color: var(--text-primary); border-color: var(--axis); font-weight: 600; }
+  button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  figure { margin: 0; }
+  .plot { position: relative; }
+  svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
+  .tip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 9px; font-size: 12px; white-space: nowrap;
+    box-shadow: 0 2px 10px rgba(0,0,0,.14); color: var(--text-primary);
+  }
+  .tip b { font-variant-numeric: tabular-nums; }
+  figcaption { color: var(--text-muted); font-size: 12px; margin-top: 12px; }
+  a { color: var(--series-1); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+  th { color: var(--text-secondary); font-weight: 600; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+  .scroll { max-height: 300px; overflow: auto; margin-top: 10px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+  .note { color: var(--text-secondary); font-size: 13px; }
+  .hero { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .hero-label { color: var(--text-muted); font-size: 12px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  footer { color: var(--text-muted); font-size: 12px; border-top: 1px solid var(--border); padding-top: 18px; margin-top: 8px; }
+  footer p { margin: 0 0 8px; }
+  @media (max-width: 560px) { .wrap { padding-top: 28px; } h1 { font-size: 20px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>J-REIT 統合指標</h1>
+  <p class="lede">
+    J-REIT について、将来リターン・分配金の安定性と成長・金利上昇耐性という3つの目的の共通因子を
+    潜在変数として推定し、財務指標から算出できる統合スコアを作るプロジェクトです。
+    <strong>現在は構築中で、スコアはまだ算出していません。</strong>
+    このページには実データが接続済みの系列だけを表示しています。
+  </p>
+
+  <section class="card">
+    <h2>接続状況</h2>
+    <p class="sub">実データが入っていない指標は「未接続」と表示します。推定値を先出しすることはしません。</p>
+    <table>
+      <thead><tr><th>指標</th><th>状態</th><th>備考</th></tr></thead>
+      <tbody id="status-body"></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2 id="chart-title">10年国債利回り</h2>
+    <p class="sub" id="chart-sub">読み込み中…</p>
+    <div class="controls" role="group" aria-labelledby="chart-title">
+      <button type="button" data-years="0" aria-pressed="true">全期間</button>
+      <button type="button" data-years="20" aria-pressed="false">過去20年</button>
+      <button type="button" data-years="10" aria-pressed="false">過去10年</button>
+      <button type="button" data-years="3" aria-pressed="false">過去3年</button>
+    </div>
+    <p><span class="hero" id="hero">–</span> <span class="hero-label" id="hero-label"></span></p>
+    <figure>
+      <div class="plot">
+        <svg id="chart" viewBox="0 0 860 340" role="img" aria-labelledby="chart-title chart-desc"></svg>
+        <p class="sr-only" id="chart-desc">10年国債利回りの月末値の推移。数値は下の表でも確認できます。</p>
+        <div class="tip" id="tip"></div>
+      </div>
+      <figcaption id="caption"></figcaption>
+    </figure>
+    <details>
+      <summary>数値を表で見る</summary>
+      <div class="scroll">
+        <table><thead><tr><th>年月</th><th class="num">利回り (%)</th></tr></thead>
+        <tbody id="table-body"></tbody></table>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    <p>このページは情報提供のみを目的としており、特定の投資商品の売買を推奨するものではありません。
+       統合スコアを掲載する際は、実測値ではなくモデルによる推定値であることを明記します。</p>
+    <p id="generated"></p>
+  </footer>
+</div>
+
+<script>
+const S = getComputedStyle(document.documentElement);
+const C = n => S.getPropertyValue(n).trim();
+const fmt = v => v.toFixed(3);
+let DATA = null, years = 0;
+
+function ym(iso) { return iso.slice(0, 7).replace("-", "/"); }
+
+function render() {
+  const svg = document.getElementById("chart");
+  const all = DATA.jgb10.points;
+  let pts = all;
+  if (years > 0) {
+    const cut = new Date(all[all.length - 1][0]);
+    cut.setFullYear(cut.getFullYear() - years);
+    pts = all.filter(p => new Date(p[0]) >= cut);
+  }
+  if (pts.length < 2) pts = all;
+
+  const W = 860, H = 340, m = { t: 14, r: 16, b: 34, l: 52 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const xs = pts.map(p => new Date(p[0]).getTime());
+  const ys = pts.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+
+  // 目盛りは切りのよい値に丸める（1/2/5 × 10^n）
+  const span = (Math.max(...ys) - Math.min(...ys)) || 1;
+  const raw = span / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
+  const stepY = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  const y0 = Math.floor(Math.min(...ys) / stepY) * stepY;
+  const y1 = Math.ceil(Math.max(...ys) / stepY) * stepY;
+  const dec = Math.max(0, -Math.floor(Math.log10(stepY)));
+  const X = t => m.l + (x1 === x0 ? 0 : (t - x0) / (x1 - x0)) * iw;
+  const Y = v => m.t + ih - (v - y0) / (y1 - y0 || 1) * ih;
+
+  // グリッドは控えめに
+  const g = [];
+  for (let v = y0; v <= y1 + 1e-9; v += stepY) {
+    const y = Y(v);
+    g.push(`<line x1="${m.l}" y1="${y.toFixed(1)}" x2="${W - m.r}" y2="${y.toFixed(1)}" stroke="${C('--grid')}" stroke-width="1"/>`);
+    g.push(`<text x="${m.l - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="${C('--text-muted')}">${v.toFixed(dec)}</text>`);
+  }
+  const yearsSpan = (x1 - x0) / (365.25 * 864e5);
+  const step = yearsSpan > 40 ? 10 : yearsSpan > 16 ? 5 : yearsSpan > 6 ? 2 : 1;
+  const d0 = new Date(x0).getFullYear(), d1 = new Date(x1).getFullYear();
+  for (let yr = Math.ceil(d0 / step) * step; yr <= d1; yr += step) {
+    const t = new Date(`${yr}-01-01`).getTime();
+    if (t < x0 || t > x1) continue;
+    g.push(`<text x="${X(t).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="11" fill="${C('--text-muted')}">${yr}</text>`);
+  }
+
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${X(xs[i]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join("");
+  svg.innerHTML = g.join("") +
+    `<line x1="${m.l}" y1="${m.t + ih}" x2="${W - m.r}" y2="${m.t + ih}" stroke="${C('--axis')}" stroke-width="1"/>` +
+    `<path d="${d}" fill="none" stroke="${C('--series-1')}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<line id="cross" x1="0" y1="${m.t}" x2="0" y2="${m.t + ih}" stroke="${C('--axis')}" stroke-width="1" opacity="0"/>` +
+    `<circle id="cursor" r="4.5" fill="${C('--series-1')}" stroke="${C('--surface-1')}" stroke-width="2" opacity="0"/>`;
+
+  const last = pts[pts.length - 1];
+  document.getElementById("hero").textContent = fmt(last[1]) + "%";
+  document.getElementById("hero-label").textContent = `${ym(last[0])} 月末`;
+  document.getElementById("caption").textContent =
+    `${ym(pts[0][0])}〜${ym(last[0])} の月末値 ${pts.length} 点。出典: ${DATA.jgb10.source}`;
+
+  const tbody = document.getElementById("table-body");
+  tbody.innerHTML = pts.slice().reverse()
+    .map(p => `<tr><td>${ym(p[0])}</td><td class="num">${fmt(p[1])}</td></tr>`).join("");
+
+  // クロスヘアとツールチップ
+  const tip = document.getElementById("tip"), plot = svg.parentElement;
+  const cross = svg.querySelector("#cross"), cur = svg.querySelector("#cursor");
+  function move(ev) {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * W;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dd = Math.abs(X(xs[i]) - px);
+      if (dd < bd) { bd = dd; best = i; }
+    }
+    const cx = X(xs[best]), cy = Y(pts[best][1]);
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("opacity", "1");
+    cur.setAttribute("cx", cx); cur.setAttribute("cy", cy); cur.setAttribute("opacity", "1");
+    tip.innerHTML = `${ym(pts[best][0])} · <b>${fmt(pts[best][1])}%</b>`;
+    tip.style.opacity = "1";
+    const sx = cx / W * r.width, sy = cy / H * r.height;
+    tip.style.left = Math.min(Math.max(sx - tip.offsetWidth / 2, 0), r.width - tip.offsetWidth) + "px";
+    tip.style.top = Math.max(sy - tip.offsetHeight - 12, 0) + "px";
+  }
+  function leave() { tip.style.opacity = "0"; cross.setAttribute("opacity", "0"); cur.setAttribute("opacity", "0"); }
+  plot.onmousemove = move; plot.onmouseleave = leave;
+  plot.ontouchstart = move; plot.ontouchmove = move; plot.ontouchend = leave;
+}
+
+fetch("data.json").then(r => r.json()).then(j => {
+  DATA = j;
+  document.getElementById("status-body").innerHTML = j.status.map(s => {
+    const ok = s.state === "ok";
+    const color = ok ? C("--status-ok") : C("--status-pending");
+    const label = ok ? "接続済み" : "未接続";
+    return `<tr><td>${s.item}</td><td><span class="dot" style="background:${color}"></span>${label}</td>` +
+           `<td class="note">${s.note}</td></tr>`;
+  }).join("");
+  document.getElementById("chart-sub").innerHTML =
+    `${j.jgb10.label}。日次 ${j.jgb10.n_daily.toLocaleString()} 件から月末値を取り出したもの。` +
+    `出典: <a href="${j.jgb10.source_url}" rel="noopener">${j.jgb10.source}</a>`;
+  document.getElementById("generated").textContent = "最終更新: " + j.generated_at;
+  render();
+}).catch(e => {
+  document.getElementById("chart-sub").textContent = "データを読み込めませんでした: " + e;
+});
+
+document.querySelectorAll(".controls button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".controls button").forEach(o => o.setAttribute("aria-pressed", "false"));
+    b.setAttribute("aria-pressed", "true");
+    years = Number(b.dataset.years);
+    if (DATA) render();
+  });
+});
+window.addEventListener("resize", () => { if (DATA) render(); });
+</script>
+</body>
+</html>

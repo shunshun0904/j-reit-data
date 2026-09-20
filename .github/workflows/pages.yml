@@ -1,0 +1,78 @@
+# GitHub Pages へのデプロイ。
+#
+# 公開するのは派生値のみ（CLAUDE.md「制約・注意」）:
+# - 財務省 国債金利情報から10年債利回りを取得し、月末値に落として JSON にする
+# - JAPAN-REIT.COM と J-Quants の生データは公開しない。現在どちらも未接続
+# - 合成データの数値は公開しない。未接続の指標はページ上で「未接続」と表示する
+#
+# Pages の公開元は Actions（リポジトリ設定側で選択済み）。
+name: pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# デプロイは同時に1本だけ。進行中のものは中断しない
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: 生成ロジックの検証（取得前に通しておく）
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_site.py
+          PYTHONPATH=. python tests/test_jgb.py
+
+      - name: 財務省 CSV から data.json を生成
+        run: PYTHONPATH=. python -m jreit_score.site --out site
+
+      - name: 公開物の確認
+        run: |
+          set -euo pipefail
+          ls -la site/
+          PYTHONPATH=. python - <<'PY'
+          import json, pathlib, sys
+          d = json.loads(pathlib.Path("site/data.json").read_text(encoding="utf-8"))
+          assert set(d) == {"generated_at", "jgb10", "status"}, sorted(d)
+          pts = d["jgb10"]["points"]
+          assert len(pts) > 100, f"月末値が少なすぎる: {len(pts)}"
+          assert d["jgb10"]["source_url"].startswith("https://www.mof.go.jp/")
+          # スコアが未接続のうちは jgb10 以外の数値系列を出さない
+          series = [k for k, v in d.items() if isinstance(v, dict) and "points" in v]
+          assert series == ["jgb10"], series
+          print(f"OK 月末値 {len(pts)} 点: {pts[0][0]} 〜 {pts[-1][0]}")
+          print("   状態:", {s["item"]: s["state"] for s in d["status"]})
+          PY
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -58,8 +58,12 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - 注意: `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈し、
   ヘッダ値の SHA-256 を Base64 にしてエラーに含めて返す。候補から削除済みで、
   probe はエラーメッセージ中の長い Base64 塊を伏せ字にしてから出力する
-- 未実装: 合併/上場廃止銘柄の復元（生存者バイアス対策）、
-  日次スナップショット蓄積の Actions、ダッシュボード
+- 動作確認済み: 公開ダッシュボードの配線（`site/index.html` + `jreit_score/site.py` +
+  `.github/workflows/pages.yml`）。財務省の10年債利回りを月末値にして描画する。
+  接続済みの系列だけを出し、未接続の指標は「未接続」と表示する。
+  合成データの数値は公開しない
+- 未実装: 合併/上場廃止銘柄の復元（生存者バイアス対策）、日次スナップショット蓄積の Actions、
+  スコアのダッシュボード掲載（データ接続後）
 
 ## 実行基盤
 - 開発セッションのネットワークポリシーが japan-reit.com / api.jquants.com / mof.go.jp を
@@ -74,7 +78,9 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     出力は表のヘッダ名・行ラベル・行列数だけに限定する（転載・複製禁止のため）。数値セルは出さない
   - `inspect-jgb.yml` 財務省 CSV の構造確認
   - `probe-jquants.yml` J-Quants のエンドポイントと認証ヘッダの確認。
-    `JQUANTS_API_KEY` が未登録だと最初のステップで失敗する
+    `JQUANTS_API_KEY` / `JQUANTS_API` のどちらかが必要
+  - `pages.yml` GitHub Pages へのデプロイ。財務省 CSV から `site/data.json` を生成して公開する。
+    公開前に「jgb10 以外の数値系列が無いこと」を検証する
 
 ## 次のタスク（優先順）
 1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
@@ -84,7 +90,8 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
    価格と分配金を `features.build_outcomes` に渡す
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
-5. Actions: 日次で JAPAN-REIT.COM スナップショット蓄積（生データはコミットしない）。派生 JSON のみ Pages へ
+5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積
+   （生データはコミットしない）と、スコア算出後のダッシュボード掲載
 
 ## 制約・注意
 - JAPAN-REIT.COM は転載・複製禁止。個人利用に限定、アクセス間隔 2 秒以上、`data/` はコミットしない
@@ -100,6 +107,8 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - `jreit_score/ingest/` 取得（`japan_reit.py` ランキング, `dpu_history.py` DPU, `jgb.py` 国債利回り）
 - `jreit_score/panel.py` 説明変数の整形
 - `jreit_score/synthetic.py` 合成データ
+- `jreit_score/site.py` 公開ダッシュボード用 JSON の組み立て
+- `site/index.html` 公開ダッシュボード（`site/data.json` は生成物なのでコミットしない）
 
 ## 実行
 ```
@@ -110,6 +119,7 @@ PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_model.py
 PYTHONPATH=. python tests/test_jgb.py
 PYTHONPATH=. python tests/test_jquants.py
+PYTHONPATH=. python tests/test_site.py
 ```
 
 ## 会話上の約束

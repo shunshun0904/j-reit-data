@@ -58,6 +58,18 @@ PYTHONPATH=. python tests/test_jquants.py
 アクセス間隔を空け（2秒以上）、取得データはリポジトリにコミットしない（`data/` は .gitignore）。
 公開段階では一次情報（TDnet/EDINET）に切り替える。
 
+## 公開ダッシュボード
+- `jreit_score/site.py` 財務省の10年債利回りを月末値に落として `site/data.json` を作る
+- `site/index.html` それを描画する静的ページ。接続済みの系列だけを表示し、
+  未接続の指標は「未接続」と明示する。合成データの数値は公開しない
+- `.github/workflows/pages.yml` 生成してデプロイする。公開前に
+  「jgb10 以外の数値系列が無いこと」を検証する
+
+```
+PYTHONPATH=. python -m jreit_score.site --out site   # data.json を生成（要ネットワーク）
+PYTHONPATH=. python tests/test_site.py
+```
+
 ## 実行
 ```
 pip install -r requirements.txt
