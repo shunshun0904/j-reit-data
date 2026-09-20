@@ -7,9 +7,10 @@
 # 未検証: ランナーから api.jquants.com に到達できるか、どのエンドポイントと
 # 認証ヘッダの組み合わせが通るか。この probe で確定させる。
 #
-# 出力はステータスコードと JSON のトップレベルキー・件数のみ。
+# 出力はステータスコードと JSON のトップレベルキー・件数・エラーメッセージのみ。
 # J-Quants のデータは再配布不可のため、レコードそのものはログに出さない。
-# APIキーも出力しない。
+# APIキーも出力しない。エラーメッセージ中の長い Base64 塊は伏せる
+# （API Gateway がヘッダ値の SHA-256 を返してくるため）。
 name: probe-jquants
 
 on:
@@ -55,7 +56,11 @@ jobs:
       - name: 整形層のフィクスチャ検証（取得前に通しておく）
         run: PYTHONPATH=. python tests/test_jquants.py
 
+      - name: 仕様ページからエンドポイントを列挙
+        run: PYTHONPATH=. python -m jreit_score.ingest.jquants --spec
+
       - name: エンドポイントと認証ヘッダの総当たり
+        continue-on-error: true
         env:
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           JQUANTS_API: ${{ secrets.JQUANTS_API }}

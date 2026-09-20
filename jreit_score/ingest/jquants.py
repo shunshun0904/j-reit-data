@@ -12,12 +12,23 @@ JQUANTS_API_KEY 無しでも確認できていない。過去2回、URL を推�
   2. `probe` ワークフローを実行し、どの組み合わせが 200 を返すかをログで確認する
   3. 確認できた組み合わせだけを `ENDPOINTS` / `AUTH_STYLES` に残し、パーサを固定する
 
+probe 1〜2回目で分かったこと（2026-09-20）:
+  - ランナーから api.jquants.com に到達できる
+  - ベースURLは `https://api.jquants.com` で正しい。`/v2/...` は J-Quants 本体の
+    ルータに届く（固有の「エンドポイントが存在しない」応答が返る）のに対し、
+    `/v1/...` と `/` は素の "Forbidden"（API Gateway でルート未定義）
+  - つまり生きているのは V2 で、`/v2/listed/info` というパス名が違うだけ
+  - `x-api-key` を付けた `/v2/listed/info` は認証エラーではなくパス不在を返したので、
+    認証ヘッダは `x-api-key` が有力（ただしパスが通っていないので未確定）
+  - 正しいパスは `--spec` で https://jpx-jquants.com/spec/ から列挙する。推測しない
+
 probe はステータスコードと JSON のトップレベルキー・件数だけを出力する。
 J-Quants のデータは再配布不可のため、レコードそのものはログに出さない。
 """
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 import pandas as pd
@@ -29,25 +40,25 @@ KEY_ENVS = ("JQUANTS_API_KEY", "JQUANTS_API")
 TIMEOUT = 30
 
 # 候補（未検証）。probe で 200 を返したものだけを残す
+# `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈しようとし、
+# ヘッダ値の SHA-256 ハッシュをエラーメッセージに含めて返す（2026-09-20 に実測）。
+# キーそのものではないが、指紋をログに残す必要はない。
 AUTH_STYLES: dict[str, callable] = {
     "none": lambda k: {},          # 認証なし。403 がルート由来か認証由来かの判別に使う
     "bearer": lambda k: {"Authorization": f"Bearer {k}"},
     "x-api-key": lambda k: {"x-api-key": k},
-    "authorization-raw": lambda k: {"Authorization": k},
 }
+# 仕様ページ。API 自身が 403 の message で指してきた URL
+SPEC_URL = "https://jpx-jquants.com/spec/"
+
+# probe で試すパス。`--spec` で列挙した結果をここに入れて絞り込む
 ENDPOINTS: dict[str, str] = {
-    "root": "/",
-    "listed_info_v2": "/v2/listed/info",
-    "listed_info_v1": "/v1/listed/info",
-    "daily_quotes_v1": "/v1/prices/daily_quotes",
-    "dividend_v1": "/v1/fins/dividend",
+    "listed_info_v2": "/v2/listed/info",   # ルータには届くがパスとしては不在（基準に残す）
 }
-# ベースURLの候補。JQUANTS_API_BASE で上書きできる
-BASE_CANDIDATES = [
-    "https://api.jquants.com",
-    "https://api.jquants.com/v1",
-    "https://api.jpx-jquants.com",
-]
+BASE_CANDIDATES = ["https://api.jquants.com"]
+
+# ヘッダ値のハッシュなど、長い Base64 らしき塊はログに出す前に伏せる
+_B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 
 def api_key() -> tuple[str, str]:
@@ -60,6 +71,39 @@ def api_key() -> tuple[str, str]:
         f"APIキーが未設定。{' または '.join(KEY_ENVS)} を GitHub Secrets に登録すること。"
         "（J-Quants のダッシュボード「設定 » APIキー」で取得）"
     )
+
+
+def redact(text: str) -> str:
+    """長い Base64 らしき塊を伏せる（キーのハッシュがログに残らないように）."""
+    return _B64.sub("<redacted>", text)
+
+
+def spec_paths(session: requests.Session | None = None) -> tuple[list[str], list[str]]:
+    """仕様ページからエンドポイントのパスと、仕様ファイルへのリンクを列挙する.
+
+    パスを推測しないためのもの。返り値は (パス候補, 仕様ファイルのURL)。
+    """
+    from urllib.parse import urljoin
+
+    import lxml.html
+
+    s = session or requests.Session()
+    r = s.get(SPEC_URL, headers={"User-Agent": "jreit-score-prototype/0.1"}, timeout=TIMEOUT)
+    r.raise_for_status()
+    r.encoding = r.apparent_encoding
+    paths = sorted({m.group(0) for m in re.finditer(r"/v\d+(?:/[A-Za-z0-9_\-]+){1,3}", r.text)})
+    files = []
+    try:
+        doc = lxml.html.fromstring(r.text)
+        files = sorted({urljoin(SPEC_URL, a.get("href"))
+                        for a in doc.xpath("//a[@href]|//script[@src]")
+                        if (a.get("href") or a.get("src") or "").lower()
+                        .endswith((".json", ".yaml", ".yml"))})
+    except Exception:
+        pass
+    files += sorted({urljoin(SPEC_URL, m.group(0))
+                     for m in re.finditer(r"[\w./\-]+\.(?:json|yaml|yml)", r.text)})
+    return paths, sorted(set(files))
 
 
 @dataclass
@@ -110,9 +154,9 @@ def probe_one(path: str, auth: str, key: str, params: dict | None = None,
                     n = len(v)
             if r.status_code != 200:
                 raw = body.get("message") or body.get("error") or ""
-                msg = str(raw)[:160]
+                msg = redact(str(raw))[:200]
     elif r.status_code != 200:
-        msg = r.text.strip()[:160].replace("\n", " ")
+        msg = redact(r.text.strip().replace("\n", " "))[:200]
     return ProbeResult(path, auth, r.status_code, keys, n, msg, b)
 
 
@@ -188,9 +232,21 @@ def to_dpu(records: list[dict]) -> pd.DataFrame:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
+    ap.add_argument("--spec", action="store_true",
+                    help="仕様ページからエンドポイントのパスを列挙する（推測しないため）")
     ap.add_argument("--probe", action="store_true",
                     help="候補のエンドポイントと認証ヘッダを総当たりして通るものを調べる")
     a = ap.parse_args()
+    if a.spec:
+        paths, files = spec_paths()
+        print(f"{SPEC_URL} から抽出")
+        print(f"\nパス候補 {len(paths)} 件:")
+        for x in paths:
+            print(f"  {x}")
+        print(f"\n仕様ファイル {len(files)} 件:")
+        for x in files:
+            print(f"  {x}")
+        raise SystemExit(0)
     if a.probe:
         results = probe()
         ok = [r for r in results if r.status == 200]
@@ -207,4 +263,4 @@ if __name__ == "__main__":
                 "ルートが存在しない（パスの候補が誤り）。認証エラー文言ならキーの形式を見直す"
             )
     else:
-        ap.error("--probe を指定すること（取得の実装は probe の結果を見てから固定する）")
+        ap.error("--spec か --probe を指定すること")
