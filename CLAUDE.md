@@ -32,12 +32,18 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   （table 2: cols=['Unnamed: 0','前期','当期','次期'],
     row_labels=['期首','期末','営業収益','当期利益','1口分配金']）。
   次期は予想なので実績は2期。`features.dpu_stability` は実績3期以上（既定 window=6）を
-  要求するため、このページでは DPU 履歴を作れない。→ 取得元の決め直しが必要（未決）
+  要求するため、このページでは DPU 履歴を作れない。
+  haitoukabu.com/reit/{code}.html も確認したが履歴は無い（表5件、最大でも (18,2) の
+  プロフィール表。2列の表は行ラベルごとに値1つなので形状の時点で履歴を保持できない）。
+  → DPU 履歴の取得元は J-Quants V2 に一本化する（`ingest/jquants.py`）
 - 動作確認済み: `ingest/jgb.py`（財務省 国債金利情報）。Actions で実ファイルに対して検証した
   - 当月分 `jgbcm.csv`、過去分 `data/jgbcm_all.csv`（BASE 直下の jgbcm_all.csv は 404）
   - all は 13,290 行 / 1974-09-24〜2026-08-31、年限15本、10年の非欠損 9,929 件
   - all は当月分を含まないので `fetch_jgb10_full` で current と結合する
-- 未実装: J-Quants 取得（価格・分配金・TRI）、合併/上場廃止銘柄の復元（生存者バイアス対策）、
+- 未確認・要APIキー: `ingest/jquants.py`。整形層（`to_prices` / `to_dpu`）は
+  フィクスチャで検証済みだが、API のベースURL・エンドポイント・認証ヘッダは未検証。
+  `JQUANTS_API_KEY` を Secrets に登録し `probe-jquants` を実行して確定させる
+- 未実装: 合併/上場廃止銘柄の復元（生存者バイアス対策）、
   日次スナップショット蓄積の Actions、ダッシュボード
 
 ## 実行基盤
@@ -52,11 +58,14 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   - `inspect-sources.yml` JAPAN-REIT.COM の表構造確認。リポジトリが public なので
     出力は表のヘッダ名・行ラベル・行列数だけに限定する（転載・複製禁止のため）。数値セルは出さない
   - `inspect-jgb.yml` 財務省 CSV の構造確認
+  - `probe-jquants.yml` J-Quants のエンドポイントと認証ヘッダの確認。
+    `JQUANTS_API_KEY` が未登録だと最初のステップで失敗する
 
 ## 次のタスク（優先順）
 1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
    （候補: J-Quants V2 の分配金、TDnet/EDINET、haitoukabu.com。いずれも未確認）
-2. J-Quants V2 で REIT の日次四本値と分配金を取得し `features.build_outcomes` に渡す（APIキーは `JQUANTS_API_KEY`）
+2. `JQUANTS_API_KEY` を Secrets に登録 → `probe-jquants` を実行 → 通った組み合わせで
+   `ingest/jquants.py` の取得を固定し、価格と分配金を `features.build_outcomes` に渡す
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. Actions: 日次で JAPAN-REIT.COM スナップショット蓄積（生データはコミットしない）。派生 JSON のみ Pages へ
@@ -84,6 +93,7 @@ python run_local.py --opposite # 符号が割れるケース（2因子へ分岐�
 PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_model.py
 PYTHONPATH=. python tests/test_jgb.py
+PYTHONPATH=. python tests/test_jquants.py
 ```
 
 ## 会話上の約束

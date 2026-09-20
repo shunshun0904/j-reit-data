@@ -20,8 +20,14 @@
 - `jreit_score/ingest/japan_reit.py` JAPAN-REIT.COM の銘柄ランキング（全銘柄×11指標）を
   日付付き Parquet として蓄積する。サイトは現在値しか出さないため定期実行で履歴を自作する
   （`data/japan_reit_ranking/asof=YYYY-MM-DD/part.parquet`）
-- `jreit_score/ingest/dpu_history.py` 銘柄別 DPU 履歴。取得元ページの表構造は未確認のため
-  「決算期」「分配金」を含む表を自動検出する汎用パーサ。まず `--inspect` で表のヘッダを確認する
+- `jreit_score/ingest/dpu_history.py` 銘柄別 DPU 履歴。**DPU 履歴の取得には使えない**。
+  JAPAN-REIT.COM の銘柄ページは「前期/当期/次期」の3期分しか持たず（次期は予想）、
+  haitoukabu.com も履歴を持たないことを Actions で確認した（2026-09-20）。
+  参考として残すが、DPU は `jquants.py` から取る
+- `jreit_score/ingest/jquants.py` J-Quants から価格と分配金を取得する。
+  整形層（`to_prices` / `to_dpu`）はフィクスチャで検証済み。
+  エンドポイントと認証ヘッダは未検証で、`probe-jquants` ワークフローで確定させる
+  （`JQUANTS_API_KEY` を GitHub Secrets に登録しておくこと）
 - `jreit_score/ingest/jgb.py` 財務省「国債金利情報」CSV から国債利回りを取得する。
   和暦（`S49.9.24` / `令和6年4月1日`）と西暦の両方、全角の年限列、欠損記号 `-` を吸収する。
   - 当月分 `jgbcm.csv` / 過去分 `data/jgbcm_all.csv`（1974-09-24〜、13,290行、年限15本）
@@ -33,17 +39,20 @@
 
 ```
 python -m jreit_score.ingest.japan_reit --out data
-python -m jreit_score.ingest.dpu_history 8985 8951 --source japan_reit --inspect
-python -m jreit_score.ingest.dpu_history 8985 8951 --source japan_reit --out data
+python -m jreit_score.ingest.dpu_history 8985 --source japan_reit --inspect  # 構造確認のみ
+JQUANTS_API_KEY=... python -m jreit_score.ingest.jquants --probe
 python -m jreit_score.ingest.jgb --list              # 取得先の一覧
 python -m jreit_score.ingest.jgb --source all --inspect
 python -m jreit_score.ingest.jgb --source full --out data   # all + current を結合
 PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_jgb.py
+PYTHONPATH=. python tests/test_jquants.py
 ```
 
 開発セッションから japan-reit.com / api.jquants.com / mof.go.jp に到達できない場合は、
-`.github/workflows/inspect-sources.yml` / `inspect-jgb.yml` を手動実行して構造を確認する。
+`.github/workflows/` の inspect-sources / inspect-jgb / probe-jquants を手動実行して確認する。
+取得先 URL は推測しない（`jgbcm_all.csv` を推測して 404、JAPAN-REIT.COM の DPU 履歴表は
+そもそも存在せず、いずれも実行して初めて分かった）。
 
 利用規約: JAPAN-REIT.COM は転載・複製を禁じている。個人利用のプロトタイプに限定し、
 アクセス間隔を空け（2秒以上）、取得データはリポジトリにコミットしない（`data/` は .gitignore）。

@@ -1,0 +1,50 @@
+# J-Quants API の到達性・エンドポイント・認証ヘッダを確認する手動ワークフロー。
+#
+# 前提: GitHub Secrets に JQUANTS_API_KEY を登録しておくこと
+# （J-Quants のダッシュボード「設定 » APIキー」で取得）。未登録だと最初のステップで失敗する。
+#
+# 未検証: ランナーから api.jquants.com に到達できるか、どのエンドポイントと
+# 認証ヘッダの組み合わせが通るか。この probe で確定させる。
+#
+# 出力はステータスコードと JSON のトップレベルキー・件数のみ。
+# J-Quants のデータは再配布不可のため、レコードそのものはログに出さない。
+# APIキーも出力しない。
+name: probe-jquants
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: APIキーの登録確認
+        env:
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JQUANTS_API_KEY:-}" ]; then
+            echo "::error::JQUANTS_API_KEY が未登録です。Settings » Secrets and variables » Actions で登録してください。"
+            exit 1
+          fi
+          echo "JQUANTS_API_KEY: 登録あり（値は出力しません）"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: 整形層のフィクスチャ検証（取得前に通しておく）
+        run: PYTHONPATH=. python tests/test_jquants.py
+
+      - name: エンドポイントと認証ヘッダの総当たり
+        env:
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+        run: PYTHONPATH=. python -m jreit_score.ingest.jquants --probe

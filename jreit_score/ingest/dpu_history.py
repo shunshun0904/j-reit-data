@@ -16,8 +16,12 @@
   なお table 0 / table 1 の行ラベルにある「分配金利回り」は DPU ではないので、
   行ラベル検出では `DPU_ROW_EXCLUDE` で除外している。
 
-候補URL（haitoukabu は未確認）:
-  haitoukabu.com 銘柄ページ : https://haitoukabu.com/reit/{code}.html
+確認済み（同上, haitoukabu.com/reit/8985.html）: 表は5件で DPU 履歴は無い。
+  3件はナビゲーション、table 3 は銘柄プロフィール (18, 2)、table 4 は株価上昇率 (3, 2)。
+  2列の表は行ラベルごとに値が1つなので、形状の時点で履歴を保持できない。
+
+結論: この2サイトの銘柄ページからは DPU 履歴を取れない。取得元は J-Quants V2 に一本化する
+（`ingest/jquants.py`）。本モジュールは参考として残すが、DPU 履歴の取得には使わない。
 """
 from __future__ import annotations
 
@@ -116,10 +120,13 @@ def fetch_dpu(code: str, source: str = "japan_reit", session: requests.Session |
             cols = [" ".join(map(str, c)) if isinstance(c, tuple) else str(c) for c in t.columns]
             # 行ラベル（先頭列）も出す。どの表が何かは列名だけでは分からないため。
             # 数値セルは出さない（JAPAN-REIT.COM は転載・複製禁止）
-            labels = [str(v)[:24] for v in t.iloc[:, 0].tolist()[:8]]
+            shown = 24
+            vals = t.iloc[:, 0].tolist()
+            labels = [str(v)[:24] for v in vals[:shown]]
+            more = f" (+{len(vals) - shown} 件省略)" if len(vals) > shown else ""
             print(f"  table {i}: shape={t.shape}")
-            print(f"    cols      : {cols[:10]}")
-            print(f"    row_labels: {labels}")
+            print(f"    cols      : {cols[:12]}")
+            print(f"    row_labels: {labels}{more}")
         print(f"  find_dpu_table: {'該当あり' if find_dpu_table(r.text) is not None else '該当なし'}")
         return None
     t = find_dpu_table(r.text)
