@@ -13,22 +13,29 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - 検証: 時系列分割。目的変数が実現済みの期だけで学習。Spearman IC と 五分位スプレッド（Newey–West t）
 - 判定ルール: 適合度が良くても負荷量の符号が割れたら 1因子で統合しない → 2因子へ
   （適合度指標だけでは符号の割れを検出できないことを合成データで確認済み）
+  - 実装は `model.fit_with_sign_branch`。判定に適合度は使わない
+  - 標準化負荷量 |λ|>=0.15 かつ p<0.05 の指標だけで判定する（弱い/非有意な符号反転での過剰分岐を防ぐ）
+  - 2因子は負荷量の符号で指標を2群に分ける。各群2本以上必要で、1本しか無い場合は
+    `two_factor_unavailable` として報告する（黙って1因子に統合しない）
+  - 2因子仕様には `q1 ~~ q2` が必須。semopy は内生潜在変数間の残差共分散を自動追加しない
 - 期ごとの横断面 z 化で期固定効果を除去（`model.cross_sectional_standardize`）
 - データ: プロトタイプは JAPAN-REIT.COM（現在値を日次蓄積）+ J-Quants V2（価格/分配金）。
   公開段階で TDnet/EDINET の一次情報へ切替。
 - 統合の重み付けは「潜在因子モデルでデータから推定」を選択済み（効用関数方式・利用者調整方式は不採用）
 
 ## 状態
-- 動作確認済み: `run_local.py`（合成データで end-to-end）, `tests/test_ingest.py`（パーサのフィクスチャ検証）
+- 動作確認済み: `run_local.py`（合成データで end-to-end）, `tests/test_ingest.py`（パーサのフィクスチャ検証）,
+  `tests/test_model.py`（符号割れ判定と2因子分岐）。Python 3.11 / pandas 3.0 / semopy 2.3.11 で確認
+- 動作確認済み: 2因子モデル分岐（`model.fit_with_sign_branch`）。`--opposite` で自動的に2因子へ落ちる
 - 未確認: `ingest/dpu_history.py` の取得元ページの表構造。`--inspect` で確認してからパーサを固定する
-- 未実装: J-Quants 取得（価格・分配金・TRI）、10年国債利回り取得（財務省CSV）、2因子モデル分岐、
+- 未実装: J-Quants 取得（価格・分配金・TRI）、10年国債利回り取得（財務省CSV）、
   合併/上場廃止銘柄の復元（生存者バイアス対策）、GitHub Actions、ダッシュボード
 
 ## 次のタスク（優先順）
 1. `python -m jreit_score.ingest.dpu_history 8985 --inspect` の結果でパーサを実構造に合わせる
 2. J-Quants V2 で REIT の日次四本値と分配金を取得し `features.build_outcomes` に渡す（APIキーは `JQUANTS_API_KEY`）
 3. 財務省の国債金利情報 CSV から 10年債利回りを取得
-4. 実データで `fit_mimic` → 負荷量の符号と適合度を確認 → 必要なら2因子
+4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. Actions: 日次で JAPAN-REIT.COM スナップショット蓄積（生データはコミットしない）。派生 JSON のみ Pages へ
 
 ## 制約・注意
@@ -49,8 +56,10 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 ## 実行
 ```
 pip install -r requirements.txt
-python run_local.py            # 合成データで全体を回す
+python run_local.py            # 合成データで全体を回す（1因子に収まる）
+python run_local.py --opposite # 符号が割れるケース（2因子へ分岐する）
 PYTHONPATH=. python tests/test_ingest.py
+PYTHONPATH=. python tests/test_model.py
 ```
 
 ## 会話上の約束
