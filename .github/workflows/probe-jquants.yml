@@ -23,18 +23,12 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: 環境の確認（可視性とAPIキーの登録名）
+      - name: APIキーの登録名を確認
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           JQUANTS_API: ${{ secrets.JQUANTS_API }}
         run: |
           set -euo pipefail
-          vis=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
-                     -H "Accept: application/vnd.github+json" \
-                     "https://api.github.com/repos/${GITHUB_REPOSITORY}" \
-                | python3 -c 'import json,sys; print(json.load(sys.stdin)["visibility"])')
-          echo "リポジトリの可視性: $vis"
           found=""
           [ -n "${JQUANTS_API_KEY:-}" ] && found="JQUANTS_API_KEY"
           [ -z "$found" ] && [ -n "${JQUANTS_API:-}" ] && found="JQUANTS_API"
