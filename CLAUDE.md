@@ -56,7 +56,8 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     census（2026-09-21）: 58 銘柄すべてで DPU 履歴あり、年次決算は `8985` の1銘柄のみ → 57 銘柄。
     期数は中央値 20（2016年8月以降）。`401A` は 2 期のみで `dpu_stability` が読み飛ばす
   - 期末が開示日より後の行（2027-01-31）が混入していたので、`period_end > DiscDate` を落とす
-    （実績は期末より前に開示できない。今日の日付には依存させない）
+    （実績は期末より前に開示できない。今日の日付には依存させない）。
+    再 census で確認済み: 未来期末 0 行、期末の範囲 2016-08-31〜2026-07-31
   - FY 行の `BPS`・`ShOutFY` と bars の `MktCap` で `nav_ratio` / `log_mcap` を J-Quants だけで作れる
   - 注意: `DivUnit`/`FDivUnit` は金額なので値集合をログに出さない（一度出してログを削除した）
 - 注意: `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈し、
@@ -89,8 +90,9 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 ## 次のタスク（優先順）
 1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
    （候補: J-Quants V2 の分配金、TDnet/EDINET、haitoukabu.com。いずれも未確認）
-2. J-Quants の取得は確定済み。`reit_universe` → `fetch_prices` / `fetch_dpu` で
-   全 REIT の価格・DPU を集めて `features.build_outcomes` に渡す（次は取得の一括実行と保存）
+2. J-Quants の取得は確定・検証済み（58 銘柄で census 済み）。`fetch_all_dpu` と
+   `fetch_prices` で全銘柄の価格・DPU を集め、`features.build_outcomes` に渡す。
+   **未決: 取得した生データの保存先**（コミット不可。Actions の artifact / cache / 外部ストレージ）
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積
