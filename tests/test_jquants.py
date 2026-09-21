@@ -85,6 +85,13 @@ def test_shape_of_reports_enums_and_counts_but_not_records():
     assert "3937" not in text and "4830" not in text   # 値そのものは出さない
 
 
+def test_shape_of_counts_non_empty_not_non_null():
+    """文字列 API の欠損は '' で来る。'' を「ある」と数えてはいけない."""
+    sh = shape_of("summary", SUMMARY, count_cols=("DivUnit", "FDivUnit"))
+    assert sh.non_null == {"DivUnit": 4, "FDivUnit": 4}   # '' が1件ずつ
+    assert "3900" not in "\n".join(sh.lines())
+
+
 # /fins/summary の実際の列名・DocType 値に合わせたフィクスチャ（金額は架空）
 SUMMARY = [
     {"DiscDate": "2024-02-15", "Code": "89850", "DocType": "FYFinancialStatements_Consolidated_REIT",

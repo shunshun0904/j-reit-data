@@ -135,9 +135,10 @@ class Shape:
     def lines(self) -> list[str]:
         if self.error:
             return [f"[{self.name}] ERROR {self.error}"]
-        out = [f"[{self.name}] {self.n} 件, 列 {len(self.columns)}: {self.columns}"]
+        head = f"[{self.name}] {self.n} 件"
+        out = [head + (f", 列 {len(self.columns)}: {self.columns}" if self.columns else "")]
         if self.non_null:
-            out.append("  非null件数: " + ", ".join(f"{k}={v}" for k, v in self.non_null.items()))
+            out.append("  空でない件数: " + ", ".join(f"{k}={v}" for k, v in self.non_null.items()))
         for k, v in self.enums.items():
             out.append(f"  {k} の値集合 ({len(v)} 種): {v[:30]}")
         return out
@@ -150,7 +151,9 @@ def shape_of(name: str, records: list[dict], enum_cols=ENUM_COLS,
     df = pd.DataFrame.from_records(records)
     enums = {c: sorted(map(str, df[c].dropna().unique()))
              for c in enum_cols if c in df.columns}
-    non_null = {c: int(df[c].notna().sum()) for c in count_cols if c in df.columns}
+    # 文字列 API では欠損が '' で来る。notna() は '' を数えてしまうので「空でない」で数える
+    non_null = {c: int((df[c].astype(str).str.strip().replace({"nan": "", "None": ""}) != "").sum())
+                for c in count_cols if c in df.columns}
     return Shape(name, len(df), list(df.columns), non_null, enums)
 
 
@@ -167,6 +170,14 @@ def discover(codes: tuple[str, ...] = ("8985", "8951"), session=None) -> list[Sh
         if "ProdCat" in df.columns:
             vc = df["ProdCat"].astype(str).value_counts().sort_index()
             sh.non_null = {f"ProdCat={k}": int(v) for k, v in vc.items()}
+            # 013 の内訳: 名称に含まれる語で数える（名称そのものは出さない）
+            r = df[df["ProdCat"].astype(str) == REIT_PRODCAT]
+            nm = r["CoName"].astype(str) if "CoName" in r.columns else pd.Series([], dtype=str)
+            sh.non_null.update({
+                "013_名称に「投資法人」": int(nm.str.contains("投資法人").sum()),
+                "013_名称に「インフラ」": int(nm.str.contains("インフラ").sum()),
+                "013_Mkt=0109": int((r["Mkt"].astype(str) == "0109").sum()) if "Mkt" in r else 0,
+            })
         out.append(sh)
         for code in codes:
             hit = df[df["Code"].astype(str).str.startswith(code)] if "Code" in df else df.iloc[0:0]
@@ -196,6 +207,16 @@ def discover(codes: tuple[str, ...] = ("8985", "8951"), session=None) -> list[Sh
             f = c.get_all(ENDPOINTS["summary"], {"code": code})
             cols = tuple(k for k in (f[0].keys() if f else ()) if _SUMMARY_COUNT.match(k))
             out.append(shape_of(f"summary(code={code})", f, count_cols=cols))
+            # (g') DocType×CurPerType ごとの分配金列の「空でない」件数。
+            #      2Q 行で DivUnit が空なら Div2Q に中間分配があるか、をここで確かめる
+            fdf = pd.DataFrame.from_records(f)
+            if {"DocType", "CurPerType"} <= set(fdf.columns):
+                for (dt, pt), g in fdf.groupby(["DocType", "CurPerType"]):
+                    gs = shape_of(f"summary(code={code}) {dt}/{pt}", g.to_dict("records"),
+                                  enum_cols=(), count_cols=("Div1Q", "Div2Q", "Div3Q", "DivFY",
+                                                            "DivAnn", "DivUnit", "FDivUnit"))
+                    gs.columns = []   # 列一覧は上で出しているので省く
+                    out.append(gs)
             # (g) 整形後: 実績期の件数と期間だけ
             d = to_dpu_from_summary(f)
             sh = Shape(f"dpu_from_summary(code={code})", len(d))
