@@ -26,7 +26,8 @@ def test_confirmed_endpoints_and_base():
     assert API_BASE.endswith("/v2")
     assert ENDPOINTS == {"master": "/equities/master",
                          "bars_daily": "/equities/bars/daily",
-                         "dividend": "/fins/dividend"}
+                         "dividend": "/fins/dividend",
+                         "summary": "/fins/summary"}
 
 
 def test_to_prices_uses_v2_short_column_names():

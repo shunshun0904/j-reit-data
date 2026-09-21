@@ -43,11 +43,15 @@ SLEEP = 0.5                                       # ページ間・銘柄間の�
 ENDPOINTS = {
     "master": "/equities/master",
     "bars_daily": "/equities/bars/daily",
-    "dividend": "/fins/dividend",
+    "dividend": "/fins/dividend",     # 2026-09-21: 現プランでは 403 (subscription)
+    "summary": "/fins/summary",       # 決算短信の要約。DivFY/DivAnn 等の1口当たり分配金を含む
 }
+REIT_PRODCAT = "013"   # discover で 8985/8951 がこの値だった。件数 ≈58 を確認して固定する
+# summary の中で非null件数を数える列（分配金・期間・開示日に関わるもの）
+_SUMMARY_COUNT = re.compile(r"^(Div|FDiv|NxFDiv|.*Date|.*FY.*|CurPer|CurFY|Disc|TypeOfDoc|TypeOfCur|NetSales|Profit|EPS)", re.I)
 # 値の集合をログに出してよい小さな列挙列（レコードそのものは出さない）
 ENUM_COLS = ("ProdCat", "Mkt", "MktNm", "S17", "S33", "FRCode", "IFCode", "StatCode",
-             "CommSpecCode", "IFTerm")
+             "CommSpecCode", "IFTerm", "TypeOfDoc", "TypeOfCurPer", "DivUnit", "FDivUnit")
 _B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 
@@ -141,11 +145,15 @@ def discover(codes: tuple[str, ...] = ("8985", "8951"), session=None) -> list[Sh
     c = Client(session=session)
     out: list[Shape] = []
 
-    # (a) master 全体: ProdCat / Mkt の値集合と件数
+    # (a) master 全体: ProdCat / Mkt の値集合と件数、ProdCat ごとの銘柄数
     try:
         m = c.get_all(ENDPOINTS["master"])
-        out.append(shape_of("master(全体)", m))
+        sh = shape_of("master(全体)", m)
         df = pd.DataFrame.from_records(m)
+        if "ProdCat" in df.columns:
+            vc = df["ProdCat"].astype(str).value_counts().sort_index()
+            sh.non_null = {f"ProdCat={k}": int(v) for k, v in vc.items()}
+        out.append(sh)
         for code in codes:
             hit = df[df["Code"].astype(str).str.startswith(code)] if "Code" in df else df.iloc[0:0]
             out.append(shape_of(f"master(code={code})", hit.to_dict("records")))
@@ -168,6 +176,14 @@ def discover(codes: tuple[str, ...] = ("8985", "8951"), session=None) -> list[Sh
                                 count_cols=("DivRate", "DistAmt", "RecDate", "ExDate", "PayDate")))
         except Exception as e:
             out.append(Shape(f"dividend(code={code})", 0, error=redact(str(e))[:200]))
+        time.sleep(SLEEP)
+        # (f) 財務サマリ: 1口当たり分配金 (DivFY/DivAnn 等) が埋まるか、何期分あるか
+        try:
+            f = c.get_all(ENDPOINTS["summary"], {"code": code})
+            cols = tuple(k for k in (f[0].keys() if f else ()) if _SUMMARY_COUNT.match(k))
+            out.append(shape_of(f"summary(code={code})", f, count_cols=cols))
+        except Exception as e:
+            out.append(Shape(f"summary(code={code})", 0, error=redact(str(e))[:200]))
         time.sleep(SLEEP)
     return out
 
