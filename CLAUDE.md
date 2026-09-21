@@ -97,6 +97,13 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
    `.github/workflows/fetch-jquants.yml`）。価格は銘柄ごとに保存済み最終日の翌日から差分、
    DPU は毎回全件。cache のキーは run_id 込みで毎回新規保存、restore-keys で直近を復元。
    7 日未参照で消えるが全件取り直すだけ。次: 取得した store を `features.build_outcomes` に渡す
+   - **現プランの価格は「今日から遡って10年」**（2026-09-21 に 400 の本文で確認:
+     `covers the following dates: 2016-09-21 ~`）。窓は日々前へ動くので開始日を固定せず、
+     400 の本文から開始日を読んで取り直す（`fetch_prices_clamped`）。差分取得は常に窓の内側。
+     cache に残った古い日付はそのまま使える（再取得はできない）
+   - 含意: rate_resilience の lookback 250 日と 12 か月の将来リターンを引くと、評価できる
+     半期末は概ね 2017-12〜2025-06。rolling_validation の min_train_periods=8 だと
+     out-of-sample は数期しか取れない
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積

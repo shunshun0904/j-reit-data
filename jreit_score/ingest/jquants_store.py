@@ -14,6 +14,7 @@ restore-keys の前方一致で直近のものを復元し、毎回新しいエ�
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,14 @@ import pandas as pd
 from .jquants import (SLEEP, Client, exclude_annual, fetch_dpu, fetch_prices, redact,
                       reit_universe)
 
-PRICE_START = "20150601"   # DPU 履歴は 2016-08 から。rate_resilience の lookback 250 日ぶん手前から
+# 希望する価格の取得開始日。実際にはプランの対象期間で切り詰められる（下記）。
+PRICE_START = "20160801"
+
+# プランの対象期間外を要求すると bars/daily が HTTP 400 を返し、本文に対象期間が書かれる:
+#   "Your subscription covers the following dates: 2016-09-21 ~ . If you want more data, ..."
+# 現プランは「今日から遡って 10 年」で、窓は日々前へ動く（2026-09-21 に確認）。
+# 開始日を固定すると翌日には範囲外になるので、400 の本文から開始日を読み取って取り直す。
+_COVERS = re.compile(r"covers the following dates:\s*(\d{4}-\d{2}-\d{2})\s*~\s*(\d{4}-\d{2}-\d{2})?")
 FILES = {"universe": "universe.parquet", "prices": "prices.parquet", "dpu": "dpu.parquet"}
 
 
@@ -91,6 +99,24 @@ def next_from(old: pd.DataFrame, code: str, default: str = PRICE_START) -> str:
     return (s.max() + pd.Timedelta(days=1)).strftime("%Y%m%d")
 
 
+def covered_start(message: str) -> str | None:
+    """400 の本文からプランの対象開始日 (YYYYMMDD) を読む. 無ければ None."""
+    m = _COVERS.search(message or "")
+    return m.group(1).replace("-", "") if m else None
+
+
+def fetch_prices_clamped(client: Client, code: str, from_yyyymmdd: str, to_yyyymmdd: str
+                         ) -> tuple[pd.DataFrame, str]:
+    """対象期間外なら本文の開始日から取り直す. 返り値は (価格, 実際の開始日)."""
+    try:
+        return fetch_prices(client, code, from_yyyymmdd, to_yyyymmdd), from_yyyymmdd
+    except RuntimeError as e:
+        start = covered_start(str(e))
+        if not start or start <= from_yyyymmdd:
+            raise
+        return fetch_prices(client, code, start, to_yyyymmdd), start
+
+
 def update(client: Client, store: Store, to_yyyymmdd: str | None = None,
            sleep: float = SLEEP, codes: list[str] | None = None) -> tuple[Store, list[tuple[str, str]]]:
     """母集団を取り直し、価格は差分、DPU は全件を取得して store を更新する.
@@ -116,18 +142,24 @@ def update(client: Client, store: Store, to_yyyymmdd: str | None = None,
     uni = uni[~uni["code"].isin(annual)].reset_index(drop=True)
 
     prices = store.prices[store.prices["code"].isin(uni["code"])] if len(store.prices) else store.prices
-    new_frames = []
+    new_frames, clamped = [], {}
     for code in uni["code"]:
         frm = next_from(prices, code)
         if frm > to:
             continue
         try:
-            new_frames.append(fetch_prices(client, code, frm, to))
+            df, actual = fetch_prices_clamped(client, code, frm, to)
+            new_frames.append(df)
+            if actual != frm:
+                clamped[code] = actual
         except Exception as e:
             failed.append((code, "prices: " + redact(str(e))[:240]))
         time.sleep(sleep)
     if new_frames:
         prices = merge_prices(prices, pd.concat(new_frames, ignore_index=True))
+    if clamped:
+        starts = sorted(set(clamped.values()))
+        print(f"プランの対象期間で開始日を切り詰めた銘柄: {len(clamped)} 件（開始日 {starts}）")
     return Store(universe=uni, prices=prices, dpu=dpu), failed
 
 
