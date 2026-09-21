@@ -1,0 +1,52 @@
+# EDINET API v2 の probe（タスク 6 段階 1）。投資法人の有価証券報告書を書類一覧から突合し、
+# 1 銘柄の有報 zip を取って物件表（所在地を含む表）の構造を出す。
+# 出力は件数・キー名・表の見出し・行数・物件名の例だけ。API キーは出さない。
+name: probe-edinet
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "書類一覧を遡る日数（有報は半期ごとなので 220 日で全銘柄が 1 通は入る想定）"
+        required: false
+        default: "220"
+      inspect:
+        description: "有報 zip を取って物件表の構造を出す銘柄コード（空なら取らない）"
+        required: false
+        default: "8972"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 整形ロジックの検証
+        run: PYTHONPATH=. python tests/test_edinet.py
+
+      - name: J-Quants の universe を cache から復元（全銘柄の突合用。無ければ 8972 だけ）
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jquants
+          key: jquants-v2-none
+          restore-keys: |
+            jquants-v2-
+
+      - name: 書類一覧の突合と物件表の構造確認
+        env:
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EDINET_API_KEY}" ]; then
+            echo "::error::Secrets に EDINET_API_KEY が無い。EDINET でアカウント登録して API キーを発行し、登録すること"
+            exit 1
+          fi
+          PYTHONPATH=. python -m jreit_score.ingest.edinet --days "${{ inputs.days }}" --inspect "${{ inputs.inspect }}"

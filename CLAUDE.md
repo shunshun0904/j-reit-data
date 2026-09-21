@@ -131,6 +131,7 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     公開する data.json はジョブのログにも残す（公開物と同一。開発セッションは github.io と
     Actions の artifact 保存先に到達できないため、ログから取って描画確認する）
   - `fetch-jquants.yml` J-Quants の差分取得と cache 保存。出力は件数・期間・サイズのみ
+  - `probe-edinet.yml` EDINET API v2 の probe（タスク 6）。`EDINET_API_KEY` が必要
   - `inspect-price-history.yml` 1 銘柄の 20 年月次価格の確認（個人利用。Yahoo Finance の yfinance）。
     J-Quants の現プランは直近 10 年のみのため。ログには年ごとの要約と分位だけ、図は artifact（7 日）。
     stooq は JavaScript の確認ページが返り取れない（2026-09-21）。
@@ -239,6 +240,13 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
    - リスク: 有報の物件表の書式が銘柄で違う（パーサの頑健性）。所在地が「住居表示」か「地番」かで
      ジオコーディング精度が変わる。EDINET の利用規約は未確認（一次情報で確認してから公開する）
    - 前提: GitHub Secrets に `EDINET_API_KEY` を登録（利用者が EDINET でアカウント登録して発行）
+   - **段階 (1) 実装済み（2026-09-21, 未実行）**: `ingest/edinet.py` + `.github/workflows/probe-edinet.yml`
+     （書類一覧を日付スキャンして secCode = 4 桁 + "0" で突合、docTypeCode 120 の最新を銘柄ごとに取り、
+     指定銘柄の有報 zip を取って「所在地」を含む HTML 表の見出し・行数・物件名の例を出す）。
+     応答のキー名は仕様書を開けていないので決め打ちにせず、1 日分の応答のキー一覧を先に出す
+   - EDINET の利用規約は `https://disclosure2dl.edinet-fsa.go.jp/guide/static/disclosure/WZEK0030.html`
+     （未読。検索結果の要約では「公共データ利用規約（PDL1.0）で出典明記」と「商用利用・改変の制限」の
+     両方の記述があり矛盾する。公開前に本文を読んで確認する）
 
 ## 制約・注意
 - JAPAN-REIT.COM は転載・複製禁止。個人利用に限定、アクセス間隔 2 秒以上、`data/` はコミットしない
@@ -274,6 +282,7 @@ PYTHONPATH=. python tests/test_site.py
 PYTHONPATH=. python tests/test_jquants_panel.py
 PYTHONPATH=. python tests/test_run_real.py
 PYTHONPATH=. python tests/test_publish.py
+PYTHONPATH=. python tests/test_edinet.py
 ```
 
 ## 会話上の約束
