@@ -26,6 +26,16 @@ discover 1〜2回目で確定（2026-09-21, 実応答）:
     8985 は 41 件、8951 は 27 件 → dpu_stability の窓（6期）に十分
   → DPU は /fins/summary から取る（to_dpu_from_summary）。プラン変更は不要
 
+discover 3回目で確定（2026-09-21, 空でない件数で再集計）:
+  - ProdCat='013' 63 件のうち名称に「インフラ」を含むもの 5 件 → J-REIT は 58 件
+    （select_reits で除外）
+  - 8985（12か月決算）の 2Q 行は Div1Q〜DivUnit が全て空で FDivUnit（予想）のみ。
+    中間分配が無いので年1点が正しい。8951（6か月決算）は FY 行 20 件全てに DivUnit
+    → 決算期間の長さが銘柄で違う。to_dpu_from_summary は period_start も返す
+  - FY 行には BPS（1口当たり純資産）と ShOutFY（発行口数）があり、bars の MktCap と
+    合わせて nav_ratio / log_mcap を J-Quants だけで作れる
+  - REITEarnForecastRevision 行は Div* も FDiv* も空（別列にある可能性。使わない）
+
 総リターンの分配金計上日: 権利落ち日は /fins/dividend でしか取れないため、
 CurPerEn（期末日=基準日）で代用する。実際の権利落ち日は期末の2営業日前で、
 6か月・12か月リターンに対する誤差は数日分。
@@ -311,7 +321,7 @@ def to_dpu_from_summary(records: list[dict],
     """
     df = pd.DataFrame.from_records(records)
     if df.empty:
-        return pd.DataFrame(columns=["code", "period_end", "dpu", "ex_date"])
+        return pd.DataFrame(columns=["code", "period_start", "period_end", "dpu", "ex_date"])
     need = {"Code", "CurPerEn", "DivUnit", "DocType"}
     missing = need - set(df.columns)
     if missing:
@@ -322,24 +332,42 @@ def to_dpu_from_summary(records: list[dict],
     out = pd.DataFrame({
         "code": _code4(df["Code"]),
         "period_end": pd.to_datetime(df["CurPerEn"], errors="coerce"),
+        # 決算期間の長さは銘柄で違う（大多数は6か月、8985 のように12か月もある）。
+        # 下流で成長率を年率化できるよう期首も持たせる
+        "period_start": pd.to_datetime(df["CurPerSt"], errors="coerce") if "CurPerSt" in df.columns
+                        else pd.NaT,
         "dpu": pd.to_numeric(df["DivUnit"].astype(str).str.replace(",", ""), errors="coerce")
                  .astype("float64"),
     })
     out["ex_date"] = out["period_end"]
     return (out.dropna(subset=["period_end", "dpu"])
                .drop_duplicates(subset=["code", "period_end"], keep="last")
-               .sort_values(["code", "period_end"]).reset_index(drop=True))
+               .sort_values(["code", "period_end"]).reset_index(drop=True)
+               [["code", "period_start", "period_end", "dpu", "ex_date"]])
 
 
-def reit_universe(client: Client) -> pd.DataFrame:
-    """上場 REIT の一覧 (ProdCat='013'). 列 code(4桁), code5, name."""
-    m = pd.DataFrame.from_records(client.get_all(ENDPOINTS["master"]))
-    if m.empty:
+INFRA_NAME_KEY = "インフラ"   # ProdCat='013' にはインフラファンド (5件) も含まれる
+
+
+def select_reits(master: pd.DataFrame, exclude_infra: bool = True) -> pd.DataFrame:
+    """master から J-REIT を選ぶ. ProdCat='013' から名称に「インフラ」を含むものを除く.
+
+    2026-09-21 の実応答: ProdCat='013' は 63 件、うち「インフラ」を含む名称が 5 件。
+    63 - 5 = 58 で CLAUDE.md の J-REIT 58 銘柄と一致する。
+    """
+    if master.empty or "ProdCat" not in master.columns:
         return pd.DataFrame(columns=["code", "code5", "name"])
-    r = m[m["ProdCat"].astype(str) == REIT_PRODCAT]
-    return (pd.DataFrame({"code": _code4(r["Code"]), "code5": r["Code"].astype(str),
-                          "name": r["CoName"] if "CoName" in r.columns else ""})
+    r = master[master["ProdCat"].astype(str) == REIT_PRODCAT]
+    name = r["CoName"].astype(str) if "CoName" in r.columns else pd.Series("", index=r.index)
+    if exclude_infra:
+        r, name = r[~name.str.contains(INFRA_NAME_KEY)], name[~name.str.contains(INFRA_NAME_KEY)]
+    return (pd.DataFrame({"code": _code4(r["Code"]), "code5": r["Code"].astype(str), "name": name})
               .drop_duplicates("code").sort_values("code").reset_index(drop=True))
+
+
+def reit_universe(client: Client, exclude_infra: bool = True) -> pd.DataFrame:
+    """上場 J-REIT の一覧. 列 code(4桁), code5, name."""
+    return select_reits(pd.DataFrame.from_records(client.get_all(ENDPOINTS["master"])), exclude_infra)
 
 
 def fetch_prices(client: Client, code: str, from_yyyymmdd: str, to_yyyymmdd: str) -> pd.DataFrame:

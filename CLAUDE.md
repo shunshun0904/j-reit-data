@@ -43,13 +43,16 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - 確認済み: `ingest/jquants.py`。公式クライアント jquants-api-client 2.7.0 のソースと
   実応答（discover 2回）で確定（2026-09-21）
   - ベースURL `https://api.jquants.com/v2`、認証 `x-api-key`、ページング `pagination_key`
-  - `/equities/master`（4,450件。REIT は `ProdCat='013'` で 63 件。CLAUDE.md の 58 より
-    多い理由は未確認。インフラファンド等を含む可能性）
+  - `/equities/master`（4,450件。`ProdCat='013'` が 63 件で、うち名称に「インフラ」を含む
+    インフラファンドが 5 件。除くと J-REIT 58 件で一致 → `select_reits`）
   - `/equities/bars/daily`（列 Date/Code/C/AdjC/Vo/MktCap[百万円]/ExRT）
   - `/fins/dividend` は**現プランで 403**。代わりに `/fins/summary` が通る:
     DocType `2Q…_REIT` / `FY…_REIT` が実績、`REITEarnForecastRevision` は予想修正。
     `CurPerEn` が期末日、`DivUnit` が1口当たり分配金の実績 → `to_dpu_from_summary`
   - 権利落ち日は取れないので総リターンの分配金計上は期末日で代用（誤差数日）
+  - 決算期間の長さが銘柄で違う（大多数は6か月、8985 は12か月で年1回分配）。
+    `to_dpu_from_summary` は `period_start` も返す。`dpu_growth` の年率化と窓の定義は未決
+  - FY 行の `BPS`・`ShOutFY` と bars の `MktCap` で `nav_ratio` / `log_mcap` を J-Quants だけで作れる
   - 注意: `DivUnit`/`FDivUnit` は金額なので値集合をログに出さない（一度出してログを削除した）
 - 注意: `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈し、
   ヘッダ値の SHA-256 を Base64 にしてエラーに含めて返す。候補から削除済みで、

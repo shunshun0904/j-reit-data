@@ -5,7 +5,8 @@
 import pandas as pd
 
 from jreit_score.ingest.jquants import (ENDPOINTS, ENUM_COLS, API_BASE, Shape, redact,
-                                        shape_of, to_dpu, to_dpu_from_summary, to_prices)
+                                        select_reits, shape_of, to_dpu, to_dpu_from_summary,
+                                        to_prices)
 
 # EQ_BARS_DAILY_COLUMNS_V2 の略記列名に合わせたフィクスチャ
 BARS = [
@@ -109,7 +110,7 @@ SUMMARY = [
 
 def test_to_dpu_from_summary_keeps_actuals_only():
     d = to_dpu_from_summary(SUMMARY)
-    assert list(d.columns) == ["code", "period_end", "dpu", "ex_date"]
+    assert list(d.columns) == ["code", "period_start", "period_end", "dpu", "ex_date"]
     assert set(d["code"]) == {"8985"}
     # 予想修正 (REITEarnForecastRevision) は落ち、同じ期の訂正は新しい方を採る
     assert d["period_end"].dt.strftime("%Y-%m-%d").tolist() == ["2023-12-31", "2024-06-30", "2024-12-31"]
@@ -123,6 +124,35 @@ def test_to_dpu_from_summary_feeds_dpu_stability():
     d = to_dpu_from_summary(SUMMARY)
     out = dpu_stability(d[["code", "period_end", "dpu"]], [pd.Timestamp("2024-12-31")], window=6)
     assert len(out) == 1 and set(out.columns) == {"code", "period", "dpu_stab", "dpu_growth"}
+
+
+MASTER = [
+    {"Code": "89510", "CoName": "日本ビルファンド投資法人", "ProdCat": "013", "Mkt": "0109"},
+    {"Code": "89850", "CoName": "ジャパン・ホテル・リート投資法人", "ProdCat": "013", "Mkt": "0109"},
+    {"Code": "92830", "CoName": "日本再生可能エネルギーインフラ投資法人", "ProdCat": "013", "Mkt": "0109"},
+    {"Code": "72030", "CoName": "トヨタ自動車", "ProdCat": "011", "Mkt": "0111"},
+    {"Code": "13060", "CoName": "ＴＯＰＩＸ連動型上場投資信託", "ProdCat": "014", "Mkt": "0109"},
+]
+
+
+def test_select_reits_excludes_infra_funds_and_non_reits():
+    """ProdCat='013' からインフラファンドを除くと J-REIT だけになる（63-5=58 の根拠）."""
+    r = select_reits(pd.DataFrame(MASTER))
+    assert r["code"].tolist() == ["8951", "8985"]
+    assert list(r.columns) == ["code", "code5", "name"]
+    assert select_reits(pd.DataFrame(MASTER), exclude_infra=False)["code"].tolist() == ["8951", "8985", "9283"]
+
+
+def test_select_reits_empty_master():
+    assert select_reits(pd.DataFrame()).empty
+
+
+def test_period_start_is_kept_for_annualisation():
+    """決算期間の長さが銘柄で違うので、期首を落とさない."""
+    rows = [dict(r, CurPerSt="2024-01-01") for r in SUMMARY]
+    d = to_dpu_from_summary(rows)
+    assert (d["period_start"] == pd.Timestamp("2024-01-01")).all()
+    assert (d["period_end"] > d["period_start"]).all()
 
 
 def test_enum_cols_never_include_amounts():
