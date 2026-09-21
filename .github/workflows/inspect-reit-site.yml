@@ -1,0 +1,28 @@
+# 投資法人の公式サイトのポートフォリオ一覧の構造確認と要約（個人利用）。
+# 出力は表の構造、用途別・地域別の件数と取得価格合計、取得価格上位の物件名だけ。
+# 物件一覧そのものは出さない。アクセス間隔 2 秒以上。
+name: inspect-reit-site
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "取得元（kdx）"
+        required: false
+        default: "kdx"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 構造確認と要約
+        run: PYTHONPATH=. python -m jreit_score.ingest.reit_site --source "${{ inputs.source }}" --policy
