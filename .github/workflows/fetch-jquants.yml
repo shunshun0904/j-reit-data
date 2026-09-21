@@ -5,6 +5,7 @@
 # 新しいエントリとして保存し、restore-keys の前方一致で直近のものを復元する。
 # 7 日間参照が無いと消えるが、その場合は全件取り直すだけで壊れない。
 #
+# キーの v2: prices に mktcap、dpu に bps/disc_date を持たせたため全件取り直す（2026-09-21）。
 # 出力は件数・期間・ファイルサイズのみ。レコードもキーも出さない。
 name: fetch-jquants
 
@@ -43,9 +44,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: data/jquants
-          key: jquants-v1-${{ github.run_id }}
+          key: jquants-v2-${{ github.run_id }}
           restore-keys: |
-            jquants-v1-
+            jquants-v2-
 
       - name: 差分取得
         env:
@@ -65,4 +66,4 @@ jobs:
         if: always()
         with:
           path: data/jquants
-          key: jquants-v1-${{ github.run_id }}
+          key: jquants-v2-${{ github.run_id }}

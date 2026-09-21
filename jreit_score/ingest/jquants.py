@@ -266,7 +266,7 @@ def to_prices(records: list[dict], price_col: str = "AdjC") -> pd.DataFrame:
     """
     df = pd.DataFrame.from_records(records)
     if df.empty:
-        return pd.DataFrame(columns=["code", "date", "close", "dividend"])
+        return pd.DataFrame(columns=["code", "date", "close", "dividend", "mktcap"])
     need = {"Code", "Date", price_col}
     missing = need - set(df.columns)
     if missing:
@@ -277,6 +277,9 @@ def to_prices(records: list[dict], price_col: str = "AdjC") -> pd.DataFrame:
         "close": pd.to_numeric(df[price_col], errors="coerce").astype("float64"),
     })
     out["dividend"] = 0.0
+    # 時価総額（百万円）。log_mcap の材料。無い応答なら NaN
+    out["mktcap"] = (pd.to_numeric(df["MktCap"], errors="coerce").astype("float64")
+                     if "MktCap" in df.columns else float("nan"))
     return (out.dropna(subset=["date", "close"])
                .sort_values(["code", "date"]).reset_index(drop=True))
 
@@ -328,7 +331,7 @@ def to_dpu_from_summary(records: list[dict],
     """
     df = pd.DataFrame.from_records(records)
     if df.empty:
-        return pd.DataFrame(columns=["code", "period_start", "period_end", "dpu", "ex_date"])
+        return pd.DataFrame(columns=["code", "period_start", "period_end", "dpu", "ex_date", "bps", "disc_date"])
     need = {"Code", "CurPerEn", "DivUnit", "DocType"}
     missing = need - set(df.columns)
     if missing:
@@ -341,6 +344,9 @@ def to_dpu_from_summary(records: list[dict],
         pend = pd.to_datetime(df["CurPerEn"], errors="coerce")
         df = df[~(pend > disc)].copy()
         df = df.sort_values("DiscDate")
+    def num(col):
+        return (pd.to_numeric(df[col].astype(str).str.replace(",", ""), errors="coerce").astype("float64")
+                if col in df.columns else float("nan"))
     out = pd.DataFrame({
         "code": _code4(df["Code"]),
         "period_end": pd.to_datetime(df["CurPerEn"], errors="coerce"),
@@ -348,14 +354,18 @@ def to_dpu_from_summary(records: list[dict],
         # 下流で成長率を年率化できるよう期首も持たせる
         "period_start": pd.to_datetime(df["CurPerSt"], errors="coerce") if "CurPerSt" in df.columns
                         else pd.NaT,
-        "dpu": pd.to_numeric(df["DivUnit"].astype(str).str.replace(",", ""), errors="coerce")
-                 .astype("float64"),
+        "dpu": num("DivUnit"),
+        # 1口当たり純資産（nav_ratio の材料）と開示日。開示日は as-of 結合の基準
+        # （期末の値は開示日まで知り得ない。期末で結合すると先読みになる）
+        "bps": num("BPS"),
+        "disc_date": pd.to_datetime(df["DiscDate"], errors="coerce") if "DiscDate" in df.columns
+                     else pd.NaT,
     })
     out["ex_date"] = out["period_end"]
     return (out.dropna(subset=["period_end", "dpu"])
                .drop_duplicates(subset=["code", "period_end"], keep="last")
                .sort_values(["code", "period_end"]).reset_index(drop=True)
-               [["code", "period_start", "period_end", "dpu", "ex_date"]])
+               [["code", "period_start", "period_end", "dpu", "ex_date", "bps", "disc_date"]])
 
 
 INFRA_NAME_KEY = "インフラ"   # ProdCat='013' にはインフラファンド (5件) も含まれる

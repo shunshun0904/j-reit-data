@@ -6,8 +6,10 @@ cache は同じキーでは上書きされないため、ワークフロー側�
 restore-keys の前方一致で直近のものを復元し、毎回新しいエントリとして保存する。
 
   data/jquants/universe.parquet  code, code5, name
-  data/jquants/prices.parquet    code, date, close(AdjC), dividend(=0)   ← features.total_return_index
-  data/jquants/dpu.parquet       code, period_start, period_end, dpu, ex_date ← features.dpu_stability
+  data/jquants/prices.parquet    code, date, close(AdjC), dividend(=0), mktcap[百万円]
+  data/jquants/dpu.parquet       code, period_start, period_end, dpu, ex_date, bps, disc_date
+  （prices は features.total_return_index、dpu は features.dpu_stability の入力。
+    mktcap / bps / disc_date は説明変数 log_mcap / nav_ratio の材料。cache キーは v2）
 
 価格は銘柄ごとに保存済みの最終日の翌日から差分取得する。分配金は決算短信の要約で
 小さい（銘柄あたり数十行）ので毎回全件を取り直し、訂正開示を取りこぼさない。
@@ -59,7 +61,8 @@ class Store:
 
 def _empty_prices() -> pd.DataFrame:
     return pd.DataFrame({"code": pd.Series(dtype=str), "date": pd.Series(dtype="datetime64[ns]"),
-                         "close": pd.Series(dtype="float64"), "dividend": pd.Series(dtype="float64")})
+                         "close": pd.Series(dtype="float64"), "dividend": pd.Series(dtype="float64"),
+                         "mktcap": pd.Series(dtype="float64")})
 
 
 def load(root: Path) -> Store:
@@ -70,7 +73,8 @@ def load(root: Path) -> Store:
     return Store(
         universe=rd("universe", pd.DataFrame(columns=["code", "code5", "name"])),
         prices=rd("prices", _empty_prices()),
-        dpu=rd("dpu", pd.DataFrame(columns=["code", "period_start", "period_end", "dpu", "ex_date"])),
+        dpu=rd("dpu", pd.DataFrame(columns=["code", "period_start", "period_end", "dpu", "ex_date",
+                                            "bps", "disc_date"])),
     )
 
 

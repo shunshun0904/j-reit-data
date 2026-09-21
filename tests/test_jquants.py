@@ -10,9 +10,9 @@ from jreit_score.ingest.jquants import (ENDPOINTS, ENUM_COLS, API_BASE, Shape, e
 
 # EQ_BARS_DAILY_COLUMNS_V2 の略記列名に合わせたフィクスチャ
 BARS = [
-    {"Date": "2025-06-30", "Code": "89850", "C": "128000", "AdjC": "128000", "Vo": 1000},
-    {"Date": "2025-07-01", "Code": "89850", "C": "129500", "AdjC": "129500", "Vo": 900},
-    {"Date": "2025-06-30", "Code": "89510", "C": "620000", "AdjC": "310000", "Vo": 500},
+    {"Date": "2025-06-30", "Code": "89850", "C": "128000", "AdjC": "128000", "Vo": 1000, "MktCap": "600000"},
+    {"Date": "2025-07-01", "Code": "89850", "C": "129500", "AdjC": "129500", "Vo": 900, "MktCap": "610000"},
+    {"Date": "2025-06-30", "Code": "89510", "C": "620000", "AdjC": "310000", "Vo": 500, "MktCap": "1000000"},
 ]
 # FINS_DIVIDEND_COLUMNS_V2 に合わせたフィクスチャ。FRCode の実績/予想の値は未確定なので
 # テストでは "R"=実績 / "F"=予想 と仮置きし、actual_codes 引数で渡す
@@ -33,7 +33,8 @@ def test_confirmed_endpoints_and_base():
 
 def test_to_prices_uses_v2_short_column_names():
     df = to_prices(BARS)
-    assert list(df.columns) == ["code", "date", "close", "dividend"]
+    assert list(df.columns) == ["code", "date", "close", "dividend", "mktcap"]
+    assert df.loc[df["code"] == "8951", "mktcap"].iloc[0] == 1000000.0
     assert set(df["code"]) == {"8985", "8951"}          # 5桁 → 4桁
     assert df.loc[df["code"] == "8951", "close"].iloc[0] == 310000.0   # AdjC を採用
     assert df["close"].dtype == "float64" and (df["dividend"] == 0.0).all()
@@ -74,7 +75,7 @@ def test_unexpected_columns_raise_with_actual_names():
 
 
 def test_empty_input_returns_right_columns():
-    assert list(to_prices([]).columns) == ["code", "date", "close", "dividend"]
+    assert list(to_prices([]).columns) == ["code", "date", "close", "dividend", "mktcap"]
     assert list(to_dpu([]).columns) == ["code", "period_end", "dpu", "ex_date"]
 
 
@@ -110,7 +111,8 @@ SUMMARY = [
 
 def test_to_dpu_from_summary_keeps_actuals_only():
     d = to_dpu_from_summary(SUMMARY)
-    assert list(d.columns) == ["code", "period_start", "period_end", "dpu", "ex_date"]
+    assert list(d.columns) == ["code", "period_start", "period_end", "dpu", "ex_date", "bps", "disc_date"]
+    assert d["disc_date"].notna().all() and d["bps"].isna().all()   # フィクスチャに BPS は無い
     assert set(d["code"]) == {"8985"}
     # 予想修正 (REITEarnForecastRevision) は落ち、同じ期の訂正は新しい方を採る
     assert d["period_end"].dt.strftime("%Y-%m-%d").tolist() == ["2023-12-31", "2024-06-30", "2024-12-31"]
@@ -169,6 +171,12 @@ def test_future_period_end_is_not_an_actual():
     assert pd.Timestamp("2027-01-31") not in set(d["period_end"])
     assert d["period_end"].max() == pd.Timestamp("2024-12-31")
     assert 9999.0 not in d["dpu"].tolist()
+
+
+def test_to_dpu_from_summary_keeps_bps_when_present():
+    rows = [dict(r, BPS="150,000") for r in SUMMARY]
+    d = to_dpu_from_summary(rows)
+    assert (d["bps"] == 150000.0).all()
 
 
 def test_period_start_absent_gives_nat_not_error():

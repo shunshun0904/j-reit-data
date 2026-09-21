@@ -58,7 +58,7 @@ def test_load_missing_dir_gives_empty_store():
     with tempfile.TemporaryDirectory() as d:
         st = load(Path(d) / "nope")
     assert st.universe.empty and st.prices.empty and st.dpu.empty
-    assert list(st.prices.columns) == ["code", "date", "close", "dividend"]
+    assert list(st.prices.columns) == ["code", "date", "close", "dividend", "mktcap"]
 
 
 REAL_400 = ("/equities/bars/daily -> HTTP 400: Your subscription covers the following dates: "
