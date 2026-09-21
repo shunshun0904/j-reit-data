@@ -170,7 +170,8 @@ if __name__ == "__main__":
             time.sleep(a.sleep)
             page = fetch(links[0][1], s)
             tables = inspect_tables(page)
-            summarize_distribution(parse_distribution(tables))
+            splits = [(pd.Timestamp(x.split(":")[0]), float(x.split(":")[1])) for x in a.splits.split(",") if x]
+            summarize_distribution(parse_distribution(tables), splits)
         if a.jq_dpu:
             splits = [(pd.Timestamp(x.split(":")[0]), float(x.split(":")[1])) for x in a.splits.split(",") if x]
             print()
@@ -218,22 +219,41 @@ def parse_distribution(tables: list[pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(columns=["period", "label", "dpu"])
 
 
-def summarize_distribution(df: pd.DataFrame) -> None:
+def period_end_from_label(label: str) -> pd.Timestamp | None:
+    """'第39期(2024年10月期)' → 2024-10-31."""
+    m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月", str(label))
+    if not m:
+        return None
+    return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1) + pd.offsets.MonthEnd(0)
+
+
+def summarize_distribution(df: pd.DataFrame, splits: list[tuple[pd.Timestamp, float]] | None = None) -> None:
     if df.empty:
         print("分配金の表を解釈できず（構造を見て列名の候補を増やす）")
         return
+    df = df.copy()
+    df["period_end"] = df["label"].map(period_end_from_label)
+    df["adj"] = [r.dpu * (split_factor(r.period_end, splits) if (splits and r.period_end is not None) else 1.0)
+                 for r in df.itertuples()]
     actual = df[~df["label"].str.contains("予想")]
     print(f"分配金の系列 {len(df)} 期（うち実績 {len(actual)}）: {df['label'].iloc[0]} 〜 {df['label'].iloc[-1]}")
     tail = df.tail(3)
-    print("  直近 3 期:", ", ".join(f"{r.label} {r.dpu:,.0f}円" for r in tail.itertuples()))
+    print("  直近 3 期（公表値）:", ", ".join(f"{r.label} {r.dpu:,.0f}円" for r in tail.itertuples()))
+    if splits:
+        print(f"  分割 {len(splits)} 回を現在の 1 口に換算した系列で以下を計算（期末が分割日より前なら比率で割る）")
     if len(actual) >= 3:
-        a = actual["dpu"].to_numpy()
+        a = actual["adj"].to_numpy()
         chg = pd.Series(a[1:] / a[:-1] - 1)
-        print(f"  実績の前期比: 増配 {int((chg > 0).sum())} 回, 減配 {int((chg < 0).sum())} 回, 据え置き {int((chg == 0).sum())} 回")
-        if len(a) >= 3:
-            print(f"  実績の前年同期比（直近）: {a[-1] / a[-3] - 1:+.1%}")
+        print(f"  実績の前期比: 増配 {int((chg > 0.001).sum())} 回, 減配 {int((chg < -0.001).sum())} 回, "
+              f"ほぼ据え置き {int((chg.abs() <= 0.001).sum())} 回")
+        print("  実績の前期比の推移:", ", ".join(f"{v:+.1%}" for v in chg))
+        print(f"  実績の前年同期比（直近）: {a[-1] / a[-3] - 1:+.1%}")
         yrs = (len(a) - 1) / 2
-        print(f"  実績の年率成長（半期 2 回/年として {yrs:.1f} 年）: {(a[-1] / a[0]) ** (1 / yrs) - 1:+.1%}  先頭 {a[0]:,.0f}円 → 直近 {a[-1]:,.0f}円")
+        print(f"  実績の年率成長（半期 2 回/年として {yrs:.1f} 年）: {(a[-1] / a[0]) ** (1 / yrs) - 1:+.1%}  "
+              f"先頭 {a[0]:,.0f}円 → 直近 {a[-1]:,.0f}円（換算後）")
+    fc = df[df["label"].str.contains("予想")]
+    if len(fc) and len(actual):
+        print("  予想 vs 直近実績（換算後）:", ", ".join(f"{r.label} {r.adj / actual['adj'].iloc[-1] - 1:+.1%}" for r in fc.itertuples()))
 
 
 def split_factor(period_end: pd.Timestamp, splits: list[tuple[pd.Timestamp, float]]) -> float:
