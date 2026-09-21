@@ -1,0 +1,44 @@
+# 実データで MIMIC を推定する（タスク4）。
+#
+# 入力は fetch-jquants が cache に置いた store（v2）と、財務省の10年債利回り。
+# 出力は推定値・適合度・IC・件数だけ（派生値）。生データはログに出さない。
+name: fit-model
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_train:
+        description: "rolling_validation の最小学習期数"
+        required: false
+        default: "6"
+
+permissions:
+  contents: read
+
+jobs:
+  fit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: パネル構築ロジックの検証
+        run: |
+          PYTHONPATH=. python tests/test_jquants_panel.py
+          PYTHONPATH=. python tests/test_model.py
+
+      - name: store を cache から復元（v2）
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jquants
+          key: jquants-v2-none
+          restore-keys: |
+            jquants-v2-
+          fail-on-cache-miss: true
+
+      - name: 推定と検証
+        run: PYTHONPATH=. python -m jreit_score.run_real --data data/jquants --min-train '${{ inputs.min_train }}'
