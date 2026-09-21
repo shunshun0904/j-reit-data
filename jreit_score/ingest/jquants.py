@@ -12,11 +12,23 @@ DPU 履歴の取得元をここに一本化する。JAPAN-REIT.COM と haitoukab
                /fins/dividend     (配当・分配金)  列 Code, DivRate, DistAmt, RecDate, ExDate,
                                                   FRCode, IFCode, PayDate, PubDate, ...
   銘柄コード : 5桁 (例 89850)。4桁指定も可とクライアントの docstring にある
+discover 1〜2回目で確定（2026-09-21, 実応答）:
+  - master 4,450 件。ProdCat='013' が 63 件で、8985/8951 はこれ（Mkt='0109', S33='9999'）
+    → REIT は ProdCat='013'。CLAUDE.md の 58 より多いのはインフラファンド等を含むため
+      と思われる（未確認。名称や別の列で絞る必要があるかは要確認）
+  - bars/daily は C/AdjC/Vo が全件非null。MktCap（百万円）と ExRT も返る
+  - /fins/dividend は現プランで HTTP 403（subscription）。DPU はここからは取れない
+  - /fins/summary は現プランで通る。REIT の DocType は
+      2QFinancialStatements_Consolidated_REIT / FYFinancialStatements_Consolidated_REIT（実績）
+      REITEarnForecastRevision（予想修正）
+    CurPerType は 2Q / FY。CurPerEn（当期末日）が全行にある。
+    DivUnit が1口当たり分配金の実績、FDivUnit が予想（文字列。空は該当なし）
+    8985 は 41 件、8951 は 27 件 → dpu_stability の窓（6期）に十分
+  → DPU は /fins/summary から取る（to_dpu_from_summary）。プラン変更は不要
 
-未確定（仕様ページが 403 のため実応答で確認する。`--discover`）:
-  - ProdCat のどの値が REIT か
-  - FRCode のどの値が実績か（予想を除くため）
-  - REIT の分配金は DivRate と DistAmt のどちらに入るか
+総リターンの分配金計上日: 権利落ち日は /fins/dividend でしか取れないため、
+CurPerEn（期末日=基準日）で代用する。実際の権利落ち日は期末の2営業日前で、
+6か月・12か月リターンに対する誤差は数日分。
 
 過去の教訓: URL を推測して2回外している（財務省は data/ 配下、JAPAN-REIT.COM の
 DPU 履歴表は不在）。J-Quants も `/v2/listed/info` と推測して外した（正しくは
@@ -50,8 +62,10 @@ REIT_PRODCAT = "013"   # discover で 8985/8951 がこの値だった。件数 �
 # summary の中で非null件数を数える列（分配金・期間・開示日に関わるもの）
 _SUMMARY_COUNT = re.compile(r"^(Div|FDiv|NxFDiv|.*Date|.*FY.*|CurPer|Disc|DocType|Sales|NP|EPS|BPS)$|^(Div|FDiv|NxFDiv|CurPer|CurFY|NxtFY)", re.I)
 # 値の集合をログに出してよい小さな列挙列（レコードそのものは出さない）
+# 値集合をログに出してよいのは区分コードだけ。DivUnit / FDivUnit は「1口当たり分配金の
+# 金額」であり区分ではない（2回目の discover で値を出してしまい、ログを削除した）。
 ENUM_COLS = ("ProdCat", "Mkt", "MktNm", "S17", "S33", "FRCode", "IFCode", "StatCode",
-             "CommSpecCode", "IFTerm", "DocType", "CurPerType", "DivUnit", "FDivUnit")
+             "CommSpecCode", "IFTerm", "DocType", "CurPerType")
 _B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 
@@ -177,11 +191,19 @@ def discover(codes: tuple[str, ...] = ("8985", "8951"), session=None) -> list[Sh
         except Exception as e:
             out.append(Shape(f"dividend(code={code})", 0, error=redact(str(e))[:200]))
         time.sleep(SLEEP)
-        # (f) 財務サマリ: 1口当たり分配金 (DivFY/DivAnn 等) が埋まるか、何期分あるか
+        # (f) 財務サマリ: 1口当たり分配金が埋まるか、何期分あるか（金額は出さない）
         try:
             f = c.get_all(ENDPOINTS["summary"], {"code": code})
             cols = tuple(k for k in (f[0].keys() if f else ()) if _SUMMARY_COUNT.match(k))
             out.append(shape_of(f"summary(code={code})", f, count_cols=cols))
+            # (g) 整形後: 実績期の件数と期間だけ
+            d = to_dpu_from_summary(f)
+            sh = Shape(f"dpu_from_summary(code={code})", len(d))
+            if len(d):
+                sh.non_null = {"first_period_end": str(d["period_end"].min().date()),
+                               "last_period_end": str(d["period_end"].max().date()),
+                               "n_positive": int((d["dpu"] > 0).sum())}
+            out.append(sh)
         except Exception as e:
             out.append(Shape(f"summary(code={code})", 0, error=redact(str(e))[:200]))
         time.sleep(SLEEP)
@@ -249,6 +271,65 @@ def to_dpu(records: list[dict], amount_col: str = "DivRate",
                .sort_values(["code", "period_end"])
                .drop_duplicates(subset=["code", "period_end"], keep="last")
                .reset_index(drop=True))
+
+
+# /fins/summary の DocType のうち実績（決算短信本体）
+SUMMARY_ACTUAL_DOCTYPES = ("2QFinancialStatements_Consolidated_REIT",
+                           "FYFinancialStatements_Consolidated_REIT")
+
+
+def to_dpu_from_summary(records: list[dict],
+                        doctypes: tuple[str, ...] = SUMMARY_ACTUAL_DOCTYPES) -> pd.DataFrame:
+    """財務サマリ (/fins/summary) から [code, period_end, dpu, ex_date] を作る.
+
+    - DocType が実績の決算短信の行だけを使う（REITEarnForecastRevision は除く）
+    - period_end = CurPerEn（当期末日）
+    - dpu = DivUnit（1口当たり分配金の実績。文字列で空は該当なし）
+    - ex_date は権利落ち日が取れないので period_end で代用（docstring 参照）
+    同じ期の訂正開示が複数あれば DiscDate の新しい方を採る。
+    """
+    df = pd.DataFrame.from_records(records)
+    if df.empty:
+        return pd.DataFrame(columns=["code", "period_end", "dpu", "ex_date"])
+    need = {"Code", "CurPerEn", "DivUnit", "DocType"}
+    missing = need - set(df.columns)
+    if missing:
+        raise KeyError(f"想定した列が無い: {sorted(missing)}。実際の列: {sorted(df.columns)}")
+    df = df[df["DocType"].astype(str).isin(doctypes)].copy()
+    if "DiscDate" in df.columns:
+        df = df.sort_values("DiscDate")
+    out = pd.DataFrame({
+        "code": _code4(df["Code"]),
+        "period_end": pd.to_datetime(df["CurPerEn"], errors="coerce"),
+        "dpu": pd.to_numeric(df["DivUnit"].astype(str).str.replace(",", ""), errors="coerce")
+                 .astype("float64"),
+    })
+    out["ex_date"] = out["period_end"]
+    return (out.dropna(subset=["period_end", "dpu"])
+               .drop_duplicates(subset=["code", "period_end"], keep="last")
+               .sort_values(["code", "period_end"]).reset_index(drop=True))
+
+
+def reit_universe(client: Client) -> pd.DataFrame:
+    """上場 REIT の一覧 (ProdCat='013'). 列 code(4桁), code5, name."""
+    m = pd.DataFrame.from_records(client.get_all(ENDPOINTS["master"]))
+    if m.empty:
+        return pd.DataFrame(columns=["code", "code5", "name"])
+    r = m[m["ProdCat"].astype(str) == REIT_PRODCAT]
+    return (pd.DataFrame({"code": _code4(r["Code"]), "code5": r["Code"].astype(str),
+                          "name": r["CoName"] if "CoName" in r.columns else ""})
+              .drop_duplicates("code").sort_values("code").reset_index(drop=True))
+
+
+def fetch_prices(client: Client, code: str, from_yyyymmdd: str, to_yyyymmdd: str) -> pd.DataFrame:
+    """1銘柄の日次四本値を features 形式で返す."""
+    return to_prices(client.get_all(ENDPOINTS["bars_daily"],
+                                    {"code": code, "from": from_yyyymmdd, "to": to_yyyymmdd}))
+
+
+def fetch_dpu(client: Client, code: str) -> pd.DataFrame:
+    """1銘柄の DPU 履歴を /fins/summary から features 形式で返す."""
+    return to_dpu_from_summary(client.get_all(ENDPOINTS["summary"], {"code": code}))
 
 
 if __name__ == "__main__":

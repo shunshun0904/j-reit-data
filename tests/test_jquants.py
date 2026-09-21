@@ -4,8 +4,8 @@
 """
 import pandas as pd
 
-from jreit_score.ingest.jquants import (ENDPOINTS, API_BASE, Shape, redact, shape_of,
-                                        to_dpu, to_prices)
+from jreit_score.ingest.jquants import (ENDPOINTS, ENUM_COLS, API_BASE, Shape, redact,
+                                        shape_of, to_dpu, to_dpu_from_summary, to_prices)
 
 # EQ_BARS_DAILY_COLUMNS_V2 の略記列名に合わせたフィクスチャ
 BARS = [
@@ -83,6 +83,44 @@ def test_shape_of_reports_enums_and_counts_but_not_records():
     assert sh.n == 3 and sh.enums["FRCode"] == ["F", "R"]
     assert sh.non_null == {"DivRate": 3}               # DistAmt は無いので出ない
     assert "3937" not in text and "4830" not in text   # 値そのものは出さない
+
+
+# /fins/summary の実際の列名・DocType 値に合わせたフィクスチャ（金額は架空）
+SUMMARY = [
+    {"DiscDate": "2024-02-15", "Code": "89850", "DocType": "FYFinancialStatements_Consolidated_REIT",
+     "CurPerType": "FY", "CurPerEn": "2023-12-31", "DivUnit": "3900", "FDivUnit": "4000"},
+    {"DiscDate": "2024-08-15", "Code": "89850", "DocType": "2QFinancialStatements_Consolidated_REIT",
+     "CurPerType": "2Q", "CurPerEn": "2024-06-30", "DivUnit": "3,950", "FDivUnit": ""},
+    {"DiscDate": "2024-10-01", "Code": "89850", "DocType": "REITEarnForecastRevision",
+     "CurPerType": "FY", "CurPerEn": "2024-12-31", "DivUnit": "", "FDivUnit": "4100"},
+    {"DiscDate": "2025-02-14", "Code": "89850", "DocType": "FYFinancialStatements_Consolidated_REIT",
+     "CurPerType": "FY", "CurPerEn": "2024-12-31", "DivUnit": "4050", "FDivUnit": "4200"},
+    {"DiscDate": "2025-02-20", "Code": "89850", "DocType": "FYFinancialStatements_Consolidated_REIT",
+     "CurPerType": "FY", "CurPerEn": "2024-12-31", "DivUnit": "4060", "FDivUnit": "4200"},  # 訂正
+]
+
+
+def test_to_dpu_from_summary_keeps_actuals_only():
+    d = to_dpu_from_summary(SUMMARY)
+    assert list(d.columns) == ["code", "period_end", "dpu", "ex_date"]
+    assert set(d["code"]) == {"8985"}
+    # 予想修正 (REITEarnForecastRevision) は落ち、同じ期の訂正は新しい方を採る
+    assert d["period_end"].dt.strftime("%Y-%m-%d").tolist() == ["2023-12-31", "2024-06-30", "2024-12-31"]
+    assert d["dpu"].tolist() == [3900.0, 3950.0, 4060.0]      # カンマ入りも読める
+    assert (d["ex_date"] == d["period_end"]).all()
+    assert d["dpu"].dtype == "float64"
+
+
+def test_to_dpu_from_summary_feeds_dpu_stability():
+    from jreit_score.features import dpu_stability
+    d = to_dpu_from_summary(SUMMARY)
+    out = dpu_stability(d[["code", "period_end", "dpu"]], [pd.Timestamp("2024-12-31")], window=6)
+    assert len(out) == 1 and set(out.columns) == {"code", "period", "dpu_stab", "dpu_growth"}
+
+
+def test_enum_cols_never_include_amounts():
+    """分配金額 (DivUnit/FDivUnit) の値集合をログに出さない."""
+    assert "DivUnit" not in ENUM_COLS and "FDivUnit" not in ENUM_COLS
 
 
 def test_redact_hides_base64_blobs():
