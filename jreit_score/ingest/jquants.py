@@ -1,73 +1,59 @@
-"""J-Quants から REIT の価格と分配金を取得する.
+"""J-Quants V2 から REIT の価格と分配金を取得する.
 
 DPU 履歴の取得元をここに一本化する。JAPAN-REIT.COM と haitoukabu.com の銘柄ページは
 いずれも履歴を持たないことを確認済み（`ingest/dpu_history.py` の docstring 参照）。
 
-未検証: API のベースURL・エンドポイント・認証ヘッダの形式は、この環境からも
-JQUANTS_API_KEY 無しでも確認できていない。過去2回、URL を推測して2回とも外している
-（財務省 `jgbcm_all.csv` は実際には `data/` 配下、JAPAN-REIT.COM の DPU 履歴表は存在せず）。
-そのため本モジュールは「候補を決め打ちしない」構成にしてある:
+確定済み（公式クライアント jquants-api-client 2.7.0 のソースから, 2026-09-21）:
+  ベースURL  : https://api.jquants.com/v2
+  認証       : ヘッダ `x-api-key: <APIキー>`
+  ページング : 応答の `pagination_key` をクエリ `pagination_key` に戻す。データ配列は `data`
+  パス       : /equities/master  (上場銘柄一覧)  列 Date, Code, CoName, ..., Mkt, MktNm, ProdCat
+               /equities/bars/daily (日次四本値)  列 Date, Code, C, AdjC, Vo, AdjFactor, ...
+               /fins/dividend     (配当・分配金)  列 Code, DivRate, DistAmt, RecDate, ExDate,
+                                                  FRCode, IFCode, PayDate, PubDate, ...
+  銘柄コード : 5桁 (例 89850)。4桁指定も可とクライアントの docstring にある
 
-  1. GitHub Secrets に `JQUANTS_API_KEY`（または `JQUANTS_API`）を登録する
-  2. `probe` ワークフローを実行し、どの組み合わせが 200 を返すかをログで確認する
-  3. 確認できた組み合わせだけを `ENDPOINTS` / `AUTH_STYLES` に残し、パーサを固定する
+未確定（仕様ページが 403 のため実応答で確認する。`--discover`）:
+  - ProdCat のどの値が REIT か
+  - FRCode のどの値が実績か（予想を除くため）
+  - REIT の分配金は DivRate と DistAmt のどちらに入るか
 
-probe 1〜2回目で分かったこと（2026-09-20）:
-  - ランナーから api.jquants.com に到達できる
-  - ベースURLは `https://api.jquants.com` で正しい。`/v2/...` は J-Quants 本体の
-    ルータに届く（固有の「エンドポイントが存在しない」応答が返る）のに対し、
-    `/v1/...` と `/` は素の "Forbidden"（API Gateway でルート未定義）
-  - つまり生きているのは V2 で、`/v2/listed/info` というパス名が違うだけ
-  - `x-api-key` を付けた `/v2/listed/info` は認証エラーではなくパス不在を返したので、
-    認証ヘッダは `x-api-key` が有力（ただしパスが通っていないので未確定）
-  - 正しいパスは `--spec` で https://jpx-jquants.com/spec/ から列挙するつもりだったが、
-    同ページは素の UA に 403 を返す（3回目の実行で確認）。ブラウザを偽装して回避はしない。
-    パスは人間が仕様ページを開いて確認し、ENDPOINTS に入れる
+過去の教訓: URL を推測して2回外している（財務省は data/ 配下、JAPAN-REIT.COM の
+DPU 履歴表は不在）。J-Quants も `/v2/listed/info` と推測して外した（正しくは
+/v2/equities/master）。推測せず、公式クライアントのソースと実応答で確定する。
 
-probe はステータスコードと JSON のトップレベルキー・件数だけを出力する。
-J-Quants のデータは再配布不可のため、レコードそのものはログに出さない。
+discover はレコードを出さない。列名・列ごとの非null件数・小さな列挙の値集合・件数だけ。
+J-Quants のデータは再配布不可。APIキーも出さない。
 """
 from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 import pandas as pd
 import requests
 
-API_BASE = os.environ.get("JQUANTS_API_BASE", "https://api.jquants.com")
-# Secrets の登録名の揺れを吸収する（先に見つかった方を使う）
-KEY_ENVS = ("JQUANTS_API_KEY", "JQUANTS_API")
+API_BASE = os.environ.get("JQUANTS_API_BASE", "https://api.jquants.com/v2")
+KEY_ENVS = ("JQUANTS_API_KEY", "JQUANTS_API")   # 登録名の揺れを吸収（先に見つかった方）
 TIMEOUT = 30
+SLEEP = 0.5                                       # ページ間・銘柄間の間隔（秒）
 
-# 候補（未検証）。probe で 200 を返したものだけを残す
-# `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈しようとし、
-# ヘッダ値の SHA-256 ハッシュをエラーメッセージに含めて返す（2026-09-20 に実測）。
-# キーそのものではないが、指紋をログに残す必要はない。
-AUTH_STYLES: dict[str, callable] = {
-    "none": lambda k: {},          # 認証なし。403 がルート由来か認証由来かの判別に使う
-    "bearer": lambda k: {"Authorization": f"Bearer {k}"},
-    "x-api-key": lambda k: {"x-api-key": k},
+ENDPOINTS = {
+    "master": "/equities/master",
+    "bars_daily": "/equities/bars/daily",
+    "dividend": "/fins/dividend",
 }
-# 仕様ページの候補。1つ目はユーザ提供の V1→V2 移行ガイド。
-# 2つ目は API 自身が 403 の message で指してきた URL（素の UA には 403 を返した）
-SPEC_URLS = [
-    "https://jpx-jquants.com/ja/spec/migration-v1-v2",
-    "https://jpx-jquants.com/spec/",
-]
-# 認証ヘッダ名の手がかりとして探す語
-AUTH_HINTS = ("x-api-key", "X-API-KEY", "Authorization", "idToken", "refreshToken",
-              "Bearer", "APIキー", "api_key", "apikey")
-
-# probe で試すパス。`--spec` で列挙した結果をここに入れて絞り込む
-ENDPOINTS: dict[str, str] = {
-    "listed_info_v2": "/v2/listed/info",   # ルータには届くがパスとしては不在（基準に残す）
-}
-BASE_CANDIDATES = ["https://api.jquants.com"]
-
-# ヘッダ値のハッシュなど、長い Base64 らしき塊はログに出す前に伏せる
+# 値の集合をログに出してよい小さな列挙列（レコードそのものは出さない）
+ENUM_COLS = ("ProdCat", "Mkt", "MktNm", "S17", "S33", "FRCode", "IFCode", "StatCode",
+             "CommSpecCode", "IFTerm")
 _B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
+
+
+def redact(text: str) -> str:
+    """長い Base64 らしき塊を伏せる（キーのハッシュがログに残らないように）."""
+    return _B64.sub("<redacted>", text)
 
 
 def api_key() -> tuple[str, str]:
@@ -82,160 +68,168 @@ def api_key() -> tuple[str, str]:
     )
 
 
-def redact(text: str) -> str:
-    """長い Base64 らしき塊を伏せる（キーのハッシュがログに残らないように）."""
-    return _B64.sub("<redacted>", text)
+class Client:
+    """最小のクライアント. 公式クライアントと同じ認証・ページング方式."""
+
+    def __init__(self, key: str | None = None, session: requests.Session | None = None,
+                 base: str = API_BASE):
+        self.key = key or api_key()[0]
+        self.s = session or requests.Session()
+        self.base = base.rstrip("/")
+
+    def get_all(self, path: str, params: dict | None = None,
+                data_key: str = "data", sleep: float = SLEEP) -> list[dict]:
+        """pagination_key を辿って全件返す."""
+        url, q, out = self.base + path, dict(params or {}), []
+        while True:
+            r = self.s.get(url, params=q, headers={"x-api-key": self.key}, timeout=TIMEOUT)
+            if r.status_code != 200:
+                msg = ""
+                try:
+                    msg = redact(str(r.json().get("message", "")))[:200]
+                except ValueError:
+                    msg = redact(r.text[:200])
+                raise RuntimeError(f"{path} -> HTTP {r.status_code}: {msg}")
+            payload = r.json()
+            batch = payload.get(data_key, [])
+            if isinstance(batch, list):
+                out.extend(batch)
+            pk = payload.get("pagination_key")
+            if not pk:
+                return out
+            q["pagination_key"] = pk
+            time.sleep(sleep)
 
 
-def spec_from(url: str, session: requests.Session | None = None) -> dict:
-    """1つの仕様ページから, エンドポイントのパス・認証の手がかり・仕様ファイルを抽出する.
-
-    パスを推測しないためのもの。ブラウザの偽装はしない（UA は正直に名乗る）。
-    """
-    from urllib.parse import urljoin
-
-    s = session or requests.Session()
-    try:
-        r = s.get(url, headers={"User-Agent": "jreit-score-prototype/0.1 (personal research)"},
-                  timeout=TIMEOUT)
-    except requests.RequestException as e:
-        return {"url": url, "status": type(e).__name__, "paths": [], "auth": [], "files": []}
-    if r.status_code != 200:
-        return {"url": url, "status": r.status_code, "paths": [], "auth": [], "files": []}
-    r.encoding = r.apparent_encoding
-    text = r.text
-    paths = sorted({m.group(0) for m in re.finditer(r"/v\d+(?:/[A-Za-z0-9_\-]+){1,3}", text)})
-    auth = sorted({h for h in AUTH_HINTS if h in text})
-    files = sorted({urljoin(url, m.group(0))
-                    for m in re.finditer(r"[\w./\-]+\.(?:json|yaml|yml)", text)})
-    return {"url": url, "status": 200, "paths": paths, "auth": auth,
-            "files": files[:20], "chars": len(text)}
-
-
-def spec_paths(session: requests.Session | None = None) -> list[dict]:
-    """候補の仕様ページを順に読み、結果を返す."""
-    s = session or requests.Session()
-    return [spec_from(u, s) for u in SPEC_URLS]
-
+# ---------------------------------------------------------------------------
+# discover: 実応答の「形」だけを見る
+# ---------------------------------------------------------------------------
 
 @dataclass
-class ProbeResult:
-    endpoint: str
-    auth: str
-    status: int | str
-    keys: list[str]
-    n_records: int | None
-    message: str = ""     # エラー応答の message。ルート由来か認証由来かの判別に使う
-    base: str = ""
+class Shape:
+    name: str
+    n: int
+    columns: list[str] = field(default_factory=list)
+    non_null: dict[str, int] = field(default_factory=dict)
+    enums: dict[str, list[str]] = field(default_factory=dict)
+    error: str = ""
 
-    def line(self) -> str:
-        ok = "OK " if self.status == 200 else "   "
-        n = "" if self.n_records is None else f" records={self.n_records}"
-        msg = f' msg="{self.message}"' if self.message else ""
-        return (f"  {ok}{self.endpoint:<24} auth={self.auth:<18} "
-                f"status={self.status}{n} keys={self.keys}{msg}")
+    def lines(self) -> list[str]:
+        if self.error:
+            return [f"[{self.name}] ERROR {self.error}"]
+        out = [f"[{self.name}] {self.n} 件, 列 {len(self.columns)}: {self.columns}"]
+        if self.non_null:
+            out.append("  非null件数: " + ", ".join(f"{k}={v}" for k, v in self.non_null.items()))
+        for k, v in self.enums.items():
+            out.append(f"  {k} の値集合 ({len(v)} 種): {v[:30]}")
+        return out
 
 
-def probe_one(path: str, auth: str, key: str, params: dict | None = None,
-              session: requests.Session | None = None, base: str | None = None) -> ProbeResult:
-    """1組み合わせを試す.
+def shape_of(name: str, records: list[dict], enum_cols=ENUM_COLS,
+             count_cols: tuple[str, ...] = ()) -> Shape:
+    if not records:
+        return Shape(name, 0)
+    df = pd.DataFrame.from_records(records)
+    enums = {c: sorted(map(str, df[c].dropna().unique()))
+             for c in enum_cols if c in df.columns}
+    non_null = {c: int(df[c].notna().sum()) for c in count_cols if c in df.columns}
+    return Shape(name, len(df), list(df.columns), non_null, enums)
 
-    データ本体は出さないが、エラー応答の `message` は出す。
-    403 がルート不在（API Gateway の "Missing Authentication Token"）なのか
-    認証失敗なのかは、これを見ないと区別できない。
-    """
-    s = session or requests.Session()
-    b = base or API_BASE
+
+def discover(codes: tuple[str, ...] = ("8985", "8951"), session=None) -> list[Shape]:
+    """3エンドポイントの応答の形を調べる. 値の集合を出すのは小さな列挙列だけ."""
+    c = Client(session=session)
+    out: list[Shape] = []
+
+    # (a) master 全体: ProdCat / Mkt の値集合と件数
     try:
-        r = s.get(b + path, headers=AUTH_STYLES[auth](key),
-                  params=params or {}, timeout=TIMEOUT)
-    except requests.RequestException as e:
-        return ProbeResult(path, auth, type(e).__name__, [], None, base=b)
-    keys: list[str] = []
-    n: int | None = None
-    msg = ""
-    if r.headers.get("content-type", "").startswith("application/json"):
+        m = c.get_all(ENDPOINTS["master"])
+        out.append(shape_of("master(全体)", m))
+        df = pd.DataFrame.from_records(m)
+        for code in codes:
+            hit = df[df["Code"].astype(str).str.startswith(code)] if "Code" in df else df.iloc[0:0]
+            out.append(shape_of(f"master(code={code})", hit.to_dict("records")))
+    except Exception as e:
+        out.append(Shape("master", 0, error=redact(str(e))[:200]))
+    time.sleep(SLEEP)
+
+    for code in codes:
+        # (e) 4桁コードで通るか、(d) 四本値の列
         try:
-            body = r.json()
-        except ValueError:
-            body = None
-        if isinstance(body, dict):
-            keys = sorted(body)[:8]
-            for k2, v in body.items():
-                if isinstance(v, list) and n is None:
-                    n = len(v)
-            if r.status_code != 200:
-                raw = body.get("message") or body.get("error") or ""
-                msg = redact(str(raw))[:200]
-    elif r.status_code != 200:
-        msg = redact(r.text.strip().replace("\n", " "))[:200]
-    return ProbeResult(path, auth, r.status_code, keys, n, msg, b)
-
-
-def probe(session: requests.Session | None = None) -> list[ProbeResult]:
-    """候補のエンドポイント × 認証ヘッダを総当たりし、どれが通るかを調べる."""
-    (key, env_name), s = api_key(), session or requests.Session()
-    print(f"使用する環境変数: {env_name}（値は出力しない, 長さ={len(key)}）")
-    bases = ([API_BASE] if os.environ.get("JQUANTS_API_BASE") else BASE_CANDIDATES)
-    out = []
-    for b in bases:
-        print(f"\n--- base={b} ---")
-        for path in ENDPOINTS.values():
-            for auth in AUTH_STYLES:
-                r = probe_one(path, auth, key, session=s, base=b)
-                print(r.line())
-                out.append(r)
+            b = c.get_all(ENDPOINTS["bars_daily"], {"code": code, "from": "20240101", "to": "20241231"})
+            out.append(shape_of(f"bars_daily(code={code}, 2024)", b, count_cols=("C", "AdjC", "Vo")))
+        except Exception as e:
+            out.append(Shape(f"bars_daily(code={code})", 0, error=redact(str(e))[:200]))
+        time.sleep(SLEEP)
+        # (b)(c) 配当: FRCode/IFCode の値集合と DivRate/DistAmt の非null件数
+        try:
+            d = c.get_all(ENDPOINTS["dividend"], {"code": code})
+            out.append(shape_of(f"dividend(code={code})", d,
+                                count_cols=("DivRate", "DistAmt", "RecDate", "ExDate", "PayDate")))
+        except Exception as e:
+            out.append(Shape(f"dividend(code={code})", 0, error=redact(str(e))[:200]))
+        time.sleep(SLEEP)
     return out
 
 
-def to_prices(records: list[dict]) -> pd.DataFrame:
-    """日次四本値のレコードを features.total_return_index の入力形式に整える.
+# ---------------------------------------------------------------------------
+# 整形: features 側の入力形式へ
+# ---------------------------------------------------------------------------
 
-    入力キー名は J-Quants の応答に合わせて調整する必要がある（未検証）。
-    出力は columns = [code, date, close, dividend]。
+def _code4(s: pd.Series) -> pd.Series:
+    """5桁コード (89850) を4桁 (8985) にする. 4桁はそのまま."""
+    s = s.astype(str).str.strip()
+    return s.where(s.str.len() != 5, s.str[:4])
+
+
+def to_prices(records: list[dict], price_col: str = "AdjC") -> pd.DataFrame:
+    """日次四本値を [code, date, close, dividend] に整える（features.total_return_index の入力）.
+
+    V2 の列名は略記: Date, Code, C (終値), AdjC (分割調整済み終値)。
+    分配金は features 側で ExDate に計上するので、ここでは 0 で初期化する。
     """
-    df = pd.DataFrame(records)
+    df = pd.DataFrame.from_records(records)
     if df.empty:
         return pd.DataFrame(columns=["code", "date", "close", "dividend"])
-    ren = {"Code": "code", "Date": "date", "Close": "close",
-           "AdjustmentClose": "close", "LocalCode": "code"}
-    df = df.rename(columns={k: v for k, v in ren.items() if k in df.columns})
-    missing = {"code", "date", "close"} - set(df.columns)
+    need = {"Code", "Date", price_col}
+    missing = need - set(df.columns)
     if missing:
         raise KeyError(f"想定した列が無い: {sorted(missing)}。実際の列: {sorted(df.columns)}")
-    out = df[["code", "date", "close"]].copy()
-    out["code"] = out["code"].astype(str).str.removesuffix("0").where(
-        out["code"].astype(str).str.len() == 5, out["code"].astype(str))
-    out["date"] = pd.to_datetime(out["date"])
-    # 取得回によって int64 / float64 が混ざらないよう float に固定する
-    out["close"] = pd.to_numeric(out["close"], errors="coerce").astype("float64")
+    out = pd.DataFrame({
+        "code": _code4(df["Code"]),
+        "date": pd.to_datetime(df["Date"], errors="coerce"),
+        "close": pd.to_numeric(df[price_col], errors="coerce").astype("float64"),
+    })
     out["dividend"] = 0.0
-    return out.dropna(subset=["close"]).sort_values(["code", "date"]).reset_index(drop=True)
+    return (out.dropna(subset=["date", "close"])
+               .sort_values(["code", "date"]).reset_index(drop=True))
 
 
-def to_dpu(records: list[dict]) -> pd.DataFrame:
-    """分配金のレコードを features.dpu_stability の入力形式に整える.
+def to_dpu(records: list[dict], amount_col: str = "DivRate",
+           actual_codes: tuple[str, ...] | None = None) -> pd.DataFrame:
+    """配当・分配金を [code, period_end, dpu, ex_date] に整える（features.dpu_stability の入力）.
 
-    出力は columns = [code, period_end, dpu]。予想値の行は除く。
+    period_end は RecDate（基準日）。ex_date は総リターン計算で分配金を計上する日。
+    actual_codes を渡すと FRCode がその集合に含まれる行だけ残す（予想を除く）。
+    FRCode の実績値は --discover で確認してから固定する。
     """
-    df = pd.DataFrame(records)
+    df = pd.DataFrame.from_records(records)
     if df.empty:
-        return pd.DataFrame(columns=["code", "period_end", "dpu"])
-    ren = {"Code": "code", "LocalCode": "code",
-           "RecordDate": "period_end", "CurrentPeriodEndDate": "period_end",
-           "DistributionAmount": "dpu", "DividendAmount": "dpu"}
-    df = df.rename(columns={k: v for k, v in ren.items() if k in df.columns})
-    missing = {"code", "period_end", "dpu"} - set(df.columns)
+        return pd.DataFrame(columns=["code", "period_end", "dpu", "ex_date"])
+    need = {"Code", "RecDate", amount_col}
+    missing = need - set(df.columns)
     if missing:
         raise KeyError(f"想定した列が無い: {sorted(missing)}。実際の列: {sorted(df.columns)}")
-    if "ForecastResultCode" in df.columns:  # 予想/実績の区分がある場合は実績のみ
-        df = df[df["ForecastResultCode"].astype(str) != "1"]
-    out = df[["code", "period_end", "dpu"]].copy()
-    out["code"] = out["code"].astype(str).str.removesuffix("0").where(
-        out["code"].astype(str).str.len() == 5, out["code"].astype(str))
-    out["period_end"] = pd.to_datetime(out["period_end"], errors="coerce")
-    out["dpu"] = pd.to_numeric(out["dpu"], errors="coerce").astype("float64")
-    return (out.dropna()
+    if actual_codes is not None and "FRCode" in df.columns:
+        df = df[df["FRCode"].astype(str).isin(actual_codes)]
+    out = pd.DataFrame({
+        "code": _code4(df["Code"]),
+        "period_end": pd.to_datetime(df["RecDate"], errors="coerce"),
+        "dpu": pd.to_numeric(df[amount_col], errors="coerce").astype("float64"),
+        "ex_date": pd.to_datetime(df["ExDate"], errors="coerce") if "ExDate" in df.columns
+                   else pd.NaT,
+    })
+    return (out.dropna(subset=["period_end", "dpu"])
                .sort_values(["code", "period_end"])
                .drop_duplicates(subset=["code", "period_end"], keep="last")
                .reset_index(drop=True))
@@ -244,47 +238,14 @@ def to_dpu(records: list[dict]) -> pd.DataFrame:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spec", action="store_true",
-                    help="仕様ページからエンドポイントのパスを列挙する（推測しないため）")
-    ap.add_argument("--probe", action="store_true",
-                    help="候補のエンドポイントと認証ヘッダを総当たりして通るものを調べる")
+    ap.add_argument("--discover", action="store_true",
+                    help="3エンドポイントの応答の形（列・件数・列挙値）を調べる。レコードは出さない")
+    ap.add_argument("--codes", nargs="*", default=["8985", "8951"])
     a = ap.parse_args()
-    if a.spec:
-        got = False
-        for res in spec_paths():
-            print(f"\n=== {res['url']}  status={res['status']} ===")
-            if res["status"] != 200:
-                continue
-            got = True
-            print(f"  取得サイズ: {res.get('chars')} 文字")
-            print(f"  認証の手がかり: {res['auth'] or 'なし'}")
-            print(f"  パス候補 {len(res['paths'])} 件:")
-            for x in res["paths"]:
-                print(f"    {x}")
-            if res["files"]:
-                print(f"  仕様ファイル {len(res['files'])} 件:")
-                for x in res["files"]:
-                    print(f"    {x}")
-        if not got:
-            raise SystemExit(
-                "どの仕様ページも取得できなかった。ブラウザ偽装はしないので、"
-                "人間が開いてパスと認証ヘッダを確認すること"
-            )
+    if a.discover:
+        _, env = api_key()
+        print(f"base={API_BASE}  key={env}（値は出さない）")
+        for sh in discover(tuple(a.codes)):
+            print("\n".join(sh.lines()))
         raise SystemExit(0)
-    if a.probe:
-        results = probe()
-        ok = [r for r in results if r.status == 200]
-        print(f"\n200 を返した組み合わせ: {len(ok)} / {len(results)}")
-        for r in ok:
-            print("  " + r.line().strip())
-        if not ok:
-            msgs = sorted({r.message for r in results if r.message})
-            print("\n観測した message:")
-            for m in msgs:
-                print(f"  - {m}")
-            raise SystemExit(
-                "通る組み合わせが無い。message が 'Missing Authentication Token' なら"
-                "ルートが存在しない（パスの候補が誤り）。認証エラー文言ならキーの形式を見直す"
-            )
-    else:
-        ap.error("--spec か --probe を指定すること")
+    ap.error("--discover を指定すること")

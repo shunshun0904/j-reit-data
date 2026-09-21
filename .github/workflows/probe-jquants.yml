@@ -1,20 +1,20 @@
-# J-Quants API の到達性・エンドポイント・認証ヘッダを確認する手動ワークフロー。
+# J-Quants V2 の実応答の「形」を確認する手動ワークフロー。
 #
-# 前提: GitHub Secrets に JQUANTS_API_KEY または JQUANTS_API を登録しておくこと
-# （J-Quants のダッシュボード「設定 » APIキー」で取得）。未登録だと最初のステップで失敗する。
-# 登録名はどちらでもよい。両方を渡して、値のある方を使う。
+# ベースURL・認証・パス・列名は公式クライアント（jquants-api-client 2.7.0）の
+# ソースから確定済み。ここで確かめるのは仕様ページ（403）でしか分からない3点:
+#   ProdCat のどの値が REIT か / FRCode のどの値が実績か / 分配金は DivRate か DistAmt か
 #
-# 未検証: ランナーから api.jquants.com に到達できるか、どのエンドポイントと
-# 認証ヘッダの組み合わせが通るか。この probe で確定させる。
-#
-# 出力はステータスコードと JSON のトップレベルキー・件数・エラーメッセージのみ。
-# J-Quants のデータは再配布不可のため、レコードそのものはログに出さない。
-# APIキーも出力しない。エラーメッセージ中の長い Base64 塊は伏せる
-# （API Gateway がヘッダ値の SHA-256 を返してくるため）。
+# 出力は列名・件数・列ごとの非null件数・小さな列挙の値集合のみ。レコードは出さない
+# （J-Quants のデータは再配布不可）。APIキーも出さない。
 name: probe-jquants
 
 on:
   workflow_dispatch:
+    inputs:
+      codes:
+        description: "確認する銘柄コード（4桁, スペース区切り）"
+        required: false
+        default: "8985 8951"
 
 permissions:
   contents: read
@@ -33,31 +33,24 @@ jobs:
           [ -n "${JQUANTS_API_KEY:-}" ] && found="JQUANTS_API_KEY"
           [ -z "$found" ] && [ -n "${JQUANTS_API:-}" ] && found="JQUANTS_API"
           if [ -z "$found" ]; then
-            echo "::error::JQUANTS_API_KEY も JQUANTS_API も未登録です。Settings » Secrets and variables » Actions で登録してください。"
+            echo "::error::JQUANTS_API_KEY も JQUANTS_API も未登録です。"
             exit 1
           fi
           echo "APIキー: $found として登録あり（値は出力しません）"
 
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-
       - run: pip install -r requirements.txt
 
       - name: 整形層のフィクスチャ検証（取得前に通しておく）
         run: PYTHONPATH=. python tests/test_jquants.py
 
-      # 仕様ページは UA で弾かれることがある（2026-09-20 に 403）。
-      # ここで止まると probe が走らないので、失敗しても続行する。
-      - name: 仕様ページからエンドポイントを列挙
-        continue-on-error: true
-        run: PYTHONPATH=. python -m jreit_score.ingest.jquants --spec
-
-      - name: エンドポイントと認証ヘッダの総当たり
+      - name: 実応答の形を確認
         env:
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           JQUANTS_API: ${{ secrets.JQUANTS_API }}
-        run: PYTHONPATH=. python -m jreit_score.ingest.jquants --probe
+          CODES: ${{ inputs.codes }}
+        run: PYTHONPATH=. python -m jreit_score.ingest.jquants --discover --codes $CODES
