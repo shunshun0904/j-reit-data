@@ -149,10 +149,20 @@ def test_select_reits_empty_master():
 
 def test_period_start_is_kept_for_annualisation():
     """決算期間の長さが銘柄で違うので、期首を落とさない."""
-    rows = [dict(r, CurPerSt="2024-01-01") for r in SUMMARY]
+    # 各行の期首はその期末の6か月前（半期決算を模す）
+    rows = [dict(r, CurPerSt=(pd.Timestamp(r["CurPerEn"]) - pd.DateOffset(months=6) + pd.Timedelta(days=1))
+                 .strftime("%Y-%m-%d")) for r in SUMMARY]
     d = to_dpu_from_summary(rows)
-    assert (d["period_start"] == pd.Timestamp("2024-01-01")).all()
+    assert d["period_start"].notna().all()
     assert (d["period_end"] > d["period_start"]).all()
+    span_days = (d["period_end"] - d["period_start"]).dt.days
+    assert span_days.between(180, 184).all()          # 6か月の期間
+
+
+def test_period_start_absent_gives_nat_not_error():
+    """CurPerSt が無い応答でも落ちず、period_start は NaT になる."""
+    d = to_dpu_from_summary(SUMMARY)
+    assert "period_start" in d.columns and d["period_start"].isna().all()
 
 
 def test_enum_cols_never_include_amounts():
