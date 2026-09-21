@@ -126,7 +126,7 @@
     J-REIT について、将来リターン・分配金の安定性と成長・金利上昇耐性という3つの目的ごとに
     潜在因子を推定し、財務指標から算出できるスコアを目的別に作るプロジェクトです。
     実データでは3つの目的に共通する因子が確認できなかったため、1本の統合スコアは作りません。
-    掲載するスコアはすべてモデルによる推定値で、識別できない目的は掲載しません。
+    掲載するスコアはすべてモデルによる推定値で、推定できない目的（識別不能や説明変数に信号が無い場合）は掲載しません。
     このページには実データが接続済みの系列だけを表示しています。
   </p>
 
@@ -352,7 +352,7 @@ fetch("data.json").then(r => r.json()).then(j => {
     const ok = s.state === "ok";
     const color = ok ? C("--status-ok") : C("--status-pending");
     const label = ok ? "掲載中" : (s.state === "internal" ? "取得済み・非掲載"
-                : s.state === "unidentified" ? "識別不能・非掲載" : "未接続");
+                : s.state === "unidentified" ? "非掲載（推定できず）" : "未接続");
     return `<tr><td>${s.item}</td><td><span class="dot" style="background:${color}"></span>${label}</td>` +
            `<td class="note">${s.note}</td></tr>`;
   }).join("");
