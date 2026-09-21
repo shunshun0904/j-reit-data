@@ -1,11 +1,11 @@
 """実データでの推定: J-Quants の store と財務省の10年債から目的変数と説明変数を作り、
-目的別 3 因子の MIMIC を推定し、時系列分割で検証する.
+目的別に MIMIC / 回帰を推定し、時系列分割で検証する.
 
 説明変数は J-Quants だけで作れる nav_ratio と log_mcap の2本（設計判断 2026-09-21）。
 ltv / noi_yield / unrealized_gain は JAPAN-REIT.COM のスナップショット蓄積待ち。
 
 1 因子の統合は実データで成立しなかった（6 指標に共通因子が無い。CLAUDE.md タスク4）ので、
-既定では目的別 3 因子（`model.fit_objective_factors`）を推定し統合しない。
+既定では目的別（`model.fit_objective_factors`, 2 指標は MIMIC・1 指標は回帰）に推定し統合しない。
 `--one-factor` で参考として 1 因子 + 符号判定も出す。
 
 出力は推定値・適合度・IC・件数のみ（派生値）。生データは出さない。
@@ -90,15 +90,15 @@ def main(data: str, start: str, end: str, min_train: int, one_factor: bool = Fal
     print("指標 × 説明変数:")
     print(with_causes.round(2).to_string())
 
-    print("\n=== 目的別 3 因子（各 2 指標の MIMIC を別々に推定, causes = nav_ratio + log_mcap） ===")
+    print("\n=== 目的別（2 指標は MIMIC, 1 指標は回帰。別々に推定, causes = nav_ratio + log_mcap） ===")
     o = fit_objective_factors(panel, OBJECTIVES, JQ_CAUSES)
     print(summarize_objectives(o))
 
-    print("\n=== 3 因子の同時推定（適合度の参考。スコアには使わない） ===")
+    print("\n=== 全目的の同時推定（適合度の参考。スコアには使わない） ===")
     try:
         stats, est = fit_objective_model_joint(panel, OBJECTIVES, JQ_CAUSES)
         print(_fit_line(stats))
-        print("因子間の残差相関（説明変数で説明した後）:")
+        print("目的間の残差相関（説明変数で説明した後）:")
         print(factor_residual_correlations(est, OBJECTIVES).round(2).to_string())
     except Exception as e:  # 収束失敗は参考値なので止めない
         print(f"収束せず: {type(e).__name__}")

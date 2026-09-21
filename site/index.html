@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>J-REIT 統合指標</title>
-<meta name="description" content="J-REIT の将来リターン・分配金・金利上昇耐性を目的別の潜在因子モデルで推定するプロジェクトの公開ページ。現在は構築中で、接続済みの系列のみを表示しています。">
+<meta name="description" content="J-REIT の将来リターン・分配金・金利上昇耐性を目的別の潜在因子モデルで推定するプロジェクトの公開ページ。スコアはモデル推定値で、接続済みの系列のみを表示しています。">
 <style>
   :root {
     color-scheme: light;
@@ -17,6 +17,7 @@
     --axis:           #c3c2b7;
     --border:         rgba(11,11,11,0.10);
     --series-1:       #2a78d6;
+    --tint:           42,120,214;
     --status-ok:      #0ca30c;
     --status-pending: #898781;
   }
@@ -32,6 +33,7 @@
       --axis:           #383835;
       --border:         rgba(255,255,255,0.10);
       --series-1:       #3987e5;
+    --tint:           57,135,229;
       --status-ok:      #0ca30c;
       --status-pending: #898781;
     }
@@ -47,6 +49,7 @@
     --axis:           #383835;
     --border:         rgba(255,255,255,0.10);
     --series-1:       #3987e5;
+    --tint:           57,135,229;
   }
   * { box-sizing: border-box; }
   body {
@@ -94,6 +97,19 @@
   .note { color: var(--text-secondary); font-size: 13px; }
   .hero { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .hero-label { color: var(--text-muted); font-size: 12px; }
+  .objectives { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .obj { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--text-secondary); }
+  .obj b { display: block; font-size: 13px; color: var(--text-primary); margin-bottom: 2px; }
+  .obj .state { font-weight: 600; }
+  .q { display: inline-block; min-width: 24px; text-align: center; border-radius: 4px; padding: 0 6px;
+       font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  .q1 { background: rgba(var(--tint), .06); }
+  .q2 { background: rgba(var(--tint), .14); }
+  .q3 { background: rgba(var(--tint), .22); }
+  .q4 { background: rgba(var(--tint), .32); }
+  .q5 { background: rgba(var(--tint), .45); font-weight: 600; }
+  .scroll-tall { max-height: 520px; }
+  th.num { text-align: right; }
   .sr-only {
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
@@ -110,7 +126,7 @@
     J-REIT について、将来リターン・分配金の安定性と成長・金利上昇耐性という3つの目的ごとに
     潜在因子を推定し、財務指標から算出できるスコアを目的別に作るプロジェクトです。
     実データでは3つの目的に共通する因子が確認できなかったため、1本の統合スコアは作りません。
-    <strong>現在は構築中で、スコアはまだ算出していません。</strong>
+    掲載するスコアはすべてモデルによる推定値で、識別できない目的は掲載しません。
     このページには実データが接続済みの系列だけを表示しています。
   </p>
 
@@ -121,6 +137,20 @@
       <thead><tr><th>指標</th><th>状態</th><th>備考</th></tr></thead>
       <tbody id="status-body"></tbody>
     </table>
+  </section>
+
+  <section class="card" id="scores-card">
+    <h2 id="scores-title">目的別スコア（モデル推定値）</h2>
+    <p class="sub" id="scores-sub">読み込み中…</p>
+    <div class="objectives" id="objectives"></div>
+    <div class="controls" id="score-sort" role="group" aria-label="並べ替え"></div>
+    <div class="scroll scroll-tall">
+      <table id="scores-table" aria-labelledby="scores-title">
+        <thead id="scores-head"></thead>
+        <tbody id="scores-body"></tbody>
+      </table>
+    </div>
+    <p class="note" id="scores-note"></p>
   </section>
 
   <section class="card">
@@ -253,12 +283,76 @@ function render() {
   plot.ontouchstart = move; plot.ontouchmove = move; plot.ontouchend = leave;
 }
 
+let sortKey = "code";
+const fz = v => (v == null ? "–" : (v > 0 ? "+" : "") + v.toFixed(2));
+const esc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+function renderScores(sc) {
+  const sub = document.getElementById("scores-sub");
+  if (!sc) {
+    sub.textContent = "モデルは未接続です。スコアはまだ掲載していません。";
+    return;
+  }
+  const f = sc.fit || {};
+  const uns = (f.unscored_codes || []).length
+    ? `（説明変数が揃わない ${f.unscored_codes.join(", ")} は除外）` : "";
+  sub.textContent =
+    `基準日 ${sc.as_of}（価格の最終営業日時点の財務指標）。推定期間 ${(f.periods || []).join("〜")}` +
+    `（${f.n_periods} 期・${f.n_rows_complete} 行）。説明変数: ${(sc.causes || []).join(", ")}。` +
+    `掲載 ${f.scored} 銘柄${uns}。`;
+
+  // 目的ごとの判定と検証結果
+  document.getElementById("objectives").innerHTML = Object.entries(sc.objectives).map(([k, o]) => {
+    const oos = o.oos || {};
+    const ver = oos.ic == null ? "時系列検証: 使える期なし"
+      : `時系列検証 IC ${fz(oos.ic)}（NW-t ${oos.ic_t}、${oos.n_periods} 期）、五分位スプレッド ${fz(oos.spread)}`;
+    const beta = o.beta ? Object.entries(o.beta).map(([c, v]) => `${c} ${fz(v)}`).join(", ") : "";
+    const state = o.usable ? `<span class="state">掲載</span>` : `<span class="state">非掲載</span>: ${esc(o.status_label)}`;
+    return `<div class="obj"><b>${esc(o.label)}</b>${state}<br>指標: ${o.indicators.join(", ")}` +
+           (o.usable ? `<br>係数: ${beta}<br>${ver}` : "") + `</div>`;
+  }).join("");
+
+  const cols = sc.columns || [];
+  const sortBox = document.getElementById("score-sort");
+  const keys = [["code", "銘柄コード順"], ...cols.map(k => [k, `${sc.objectives[k].label} 順`])];
+  sortBox.innerHTML = keys.map(([k, t]) =>
+    `<button type="button" data-sort="${k}" aria-pressed="${k === sortKey}">${esc(t)}</button>`).join("");
+  sortBox.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    sortKey = b.dataset.sort;
+    sortBox.querySelectorAll("button").forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+    drawScoreTable(sc);
+  }));
+  drawScoreTable(sc);
+
+  document.getElementById("scores-note").textContent =
+    "z スコアは目的ごとに掲載銘柄間で標準化した値（平均 0、標準偏差 1）。五分位は 5 が上位。" +
+    "いずれも財務指標から線形に算出したモデル推定値で、実測値ではなく、将来の成果を示すものでもありません。" +
+    "識別できない目的は掲載しません。特定の銘柄の売買を推奨するものではありません。";
+}
+
+function drawScoreTable(sc) {
+  const cols = sc.columns || [];
+  document.getElementById("scores-head").innerHTML =
+    `<tr><th>コード</th><th>銘柄名</th>` +
+    cols.map(k => `<th class="num">${esc(sc.objectives[k].label)} z</th><th>五分位</th>`).join("") + `</tr>`;
+  const rows = sc.rows.slice();
+  if (sortKey !== "code") rows.sort((a, b) => ((b[sortKey] || {}).z ?? -Infinity) - ((a[sortKey] || {}).z ?? -Infinity));
+  document.getElementById("scores-body").innerHTML = rows.map(r =>
+    `<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td>` +
+    cols.map(k => {
+      const c = r[k] || {};
+      const q = c.q == null ? "–" : `<span class="q q${c.q}">${c.q}</span>`;
+      return `<td class="num">${fz(c.z)}</td><td>${q}</td>`;
+    }).join("") + `</tr>`).join("");
+}
+
 fetch("data.json").then(r => r.json()).then(j => {
   DATA = j;
   document.getElementById("status-body").innerHTML = j.status.map(s => {
     const ok = s.state === "ok";
     const color = ok ? C("--status-ok") : C("--status-pending");
-    const label = ok ? "接続済み" : (s.state === "internal" ? "取得済み・非掲載" : "未接続");
+    const label = ok ? "掲載中" : (s.state === "internal" ? "取得済み・非掲載"
+                : s.state === "unidentified" ? "識別不能・非掲載" : "未接続");
     return `<tr><td>${s.item}</td><td><span class="dot" style="background:${color}"></span>${label}</td>` +
            `<td class="note">${s.note}</td></tr>`;
   }).join("");
@@ -266,6 +360,7 @@ fetch("data.json").then(r => r.json()).then(j => {
     `${j.jgb10.label}。日次 ${j.jgb10.n_daily.toLocaleString()} 件から月末値を取り出したもの。` +
     `出典: <a href="${j.jgb10.source_url}" rel="noopener">${j.jgb10.source}</a>`;
   document.getElementById("generated").textContent = "最終更新: " + j.generated_at;
+  renderScores(j.scores);
   render();
 }).catch(e => {
   document.getElementById("chart-sub").textContent = "データを読み込めませんでした: " + e;

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from jreit_score.features import OBJECTIVES, OUTCOME_COLS
-from jreit_score.model import (DEFAULT_CAUSES, check_sign_split,
+from jreit_score.model import (DEFAULT_CAUSES, FittedRegression, check_sign_split,
                                cross_sectional_standardize, factor_residual_correlations,
                                fit_mimic, fit_objective_factors, fit_objective_model_joint,
                                fit_with_sign_branch, objective_model_spec,
@@ -125,10 +125,11 @@ RET_SPLIT = [0.7, -0.8, 0.5, 0.4, 0.6, 0.5]              # リターン2指標�
 # 目的ごとに別の因子が別の説明変数で決まる生成過程（実データと同じく共通因子が無い）
 BETA3 = {
     "q_ret": {"nav_ratio": -0.5, "log_mcap": 0.1},
-    "q_dpu": {"ltv": -0.4, "occupancy": 0.3},
+    "q_stab": {"ltv": -0.5},
+    "q_grow": {"occupancy": 0.5},
     "q_rate": {"fixed_rate_ratio": 0.4, "log_mcap": 0.3},
 }
-LAM3 = {"q_ret": [0.7, 0.8], "q_dpu": [0.5, 0.4], "q_rate": [0.6, 0.5]}
+LAM3 = {"q_ret": [0.7, 0.8], "q_stab": [0.6], "q_grow": [0.6], "q_rate": [0.6, 0.5]}
 
 
 def _panel3(seed=0, n_codes=58, n_periods=10):
@@ -140,7 +141,7 @@ def _panel3(seed=0, n_codes=58, n_periods=10):
         for fac, inds in OBJECTIVES.items():
             b = np.array([BETA3[fac].get(c, 0.0) for c in DEFAULT_CAUSES])
             eta = X @ b + rng.normal(scale=0.7, size=n_codes)
-            df[inds] = np.outer(eta, LAM3[fac]) + rng.normal(scale=0.8, size=(n_codes, 2))
+            df[inds] = np.outer(eta, LAM3[fac]) + rng.normal(scale=0.8, size=(n_codes, len(inds)))
         df["code"] = [f"{8950 + i}" for i in range(n_codes)]
         df["period"] = p
         rows.append(df)
@@ -155,7 +156,7 @@ def _last_period(panel):
 def test_objectives_cover_outcome_cols_exactly_once():
     flat = [i for inds in OBJECTIVES.values() for i in inds]
     assert sorted(flat) == sorted(OUTCOME_COLS) and len(flat) == len(set(flat))
-    assert all(len(inds) == 2 for inds in OBJECTIVES.values())
+    assert all(len(inds) in (1, 2) for inds in OBJECTIVES.values())
 
 
 def test_objective_factors_all_usable_when_common_factor_exists():
@@ -170,30 +171,52 @@ def test_objective_factors_all_usable_when_common_factor_exists():
             assert s[fac].corr(test[i], method="spearman") > 0, (fac, i)
 
 
-def test_three_separate_factors_pick_their_own_causes():
+def test_separate_objectives_pick_their_own_causes():
     o = fit_objective_factors(_panel3())
     assert o.usable == list(OBJECTIVES), {n: (f.status, f.reason) for n, f in o.factors.items()}
     assert o.factors["q_ret"].fitted.beta["nav_ratio"] < -0.2
-    assert o.factors["q_dpu"].fitted.beta["ltv"] < -0.2
+    assert o.factors["q_stab"].fitted.beta["ltv"] < -0.2
+    assert o.factors["q_grow"].fitted.beta["occupancy"] > 0.2
     assert o.factors["q_rate"].fitted.beta["fixed_rate_ratio"] > 0.2
 
 
+def test_single_indicator_objective_is_a_regression():
+    panel = _panel3()
+    o = fit_objective_factors(panel)
+    f = o.factors["q_stab"].fitted
+    assert isinstance(f, FittedRegression) and f.indicators == ["dpu_stab"] and f.n > 0
+    assert f.pvalues["ltv"] < 0.05 and 0 < f.r2 < 1
+    test = _last_period(panel)
+    assert f.predict_score(test).corr(test["dpu_stab"], method="spearman") > 0
+    assert "regression" in summarize_objectives(o)
+
+
 def test_one_factor_rule_does_not_catch_a_missing_common_factor():
-    """実データと同じ構造: 符号は割れないが共通因子が無い. 目的別なら3因子とも使える."""
+    """実データと同じ構造: 符号は割れないが共通因子が無い. 目的別なら全目的が使える."""
     panel = _panel3()
     b = fit_with_sign_branch(panel)
     assert b.decision == "one_factor", b.reason          # 判定ルールの盲点
-    assert len(fit_objective_factors(panel).usable) == 3
+    assert len(fit_objective_factors(panel).usable) == len(OBJECTIVES)
 
 
 def test_noise_objective_is_reported_not_scored():
+    """分配金 2 指標が純ノイズ: 回帰に有意な説明変数が無く no_signal. スコアは出さない."""
     panel = _panel(NO_DPU)
     o = fit_objective_factors(panel)
-    assert o.factors["q_dpu"].status != "ok", o.factors["q_dpu"].reason
+    for n in ("q_stab", "q_grow"):
+        assert o.factors[n].status == "no_signal", (n, o.factors[n].reason)
     assert o.factors["q_ret"].status == "ok" and o.factors["q_rate"].status == "ok"
-    assert "q_dpu" not in o.predict_scores(_last_period(panel)).columns
+    cols = o.predict_scores(_last_period(panel)).columns
+    assert "q_stab" not in cols and "q_grow" not in cols
     assert set(o.indicator_groups()) == {"q_ret", "q_rate"}
-    assert "q_dpu" in summarize_objectives(o) and "識別不能" in summarize_objectives(o)
+    assert "ノイズ" in summarize_objectives(o)
+
+
+def test_weak_two_indicator_objective_is_unidentified():
+    """2 指標が因子に載らない（純ノイズ）と識別不能. 実データの q_dpu と同じ状況."""
+    o = fit_objective_factors(_panel(NO_DPU), objectives={"q_dpu": ["dpu_stab", "dpu_growth"]})
+    assert o.factors["q_dpu"].status != "ok", o.factors["q_dpu"].reason
+    assert o.usable == []
 
 
 def test_sign_split_within_objective_is_reported():
@@ -204,16 +227,19 @@ def test_sign_split_within_objective_is_reported():
 
 def test_objective_model_spec_declares_residual_covariances():
     spec = objective_model_spec(OBJECTIVES, DEFAULT_CAUSES)
-    assert spec.count("=~") == 3 and spec.count("~~") == 3
+    assert spec.count("=~") == 4 and spec.count("~~") == 6 + 2       # 目的の対 6 + 残差分散の固定 2
     for n in OBJECTIVES:
         assert f"{n} ~ " in spec
+    assert "q_stab =~ 1*dpu_stab" in spec and "dpu_stab ~~ 0*dpu_stab" in spec
 
 
 def test_joint_fit_residual_correlations_small_without_common_factor():
     stats, est = fit_objective_model_joint(_panel3())
     r = factor_residual_correlations(est)
-    assert r.shape == (3, 3) and np.allclose(np.diag(r), 1) and np.allclose(r, r.T)
-    assert (np.abs(r.to_numpy()[~np.eye(3, dtype=bool)]) < 0.3).all(), r
+    k = len(OBJECTIVES)
+    assert r.shape == (k, k) and np.allclose(np.diag(r), 1) and np.allclose(r, r.T)
+    assert list(r.index) == list(OBJECTIVES)
+    assert (np.abs(r.to_numpy()[~np.eye(k, dtype=bool)]) < 0.3).all(), r
     s = stats["Value"] if "Value" in stats.columns else stats.iloc[:, 0]
     assert float(s["CFI"]) > 0.95
 
@@ -226,7 +252,7 @@ def test_rolling_validation_by_objectives():
         assert f"status_{n}" in ic and f"ic_composite_{n}" in ic and f"q5_minus_q1_{n}" in ic
         assert f"score_{n}" in scores
         assert (ic[f"status_{n}"] == "ok").all()
-    assert "q_ret" in status_summary(ic) and "ic_composite_q_dpu" in report(ic)
+    assert "q_ret" in status_summary(ic) and "ic_composite_q_stab" in report(ic)
 
 
 def test_rolling_validation_rejects_branch_with_objectives():

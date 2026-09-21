@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 import semopy
+import statsmodels.api as sm
 
 from .features import OBJECTIVES, OUTCOME_COLS
 
@@ -37,6 +38,7 @@ class FittedMIMIC:
     beta: pd.Series = field(default_factory=pd.Series)
     params: pd.DataFrame = field(default_factory=pd.DataFrame)
     stats: pd.DataFrame = field(default_factory=pd.DataFrame)
+    n: int = 0
 
     def predict_score(self, X: pd.DataFrame) -> pd.Series:
         """構造方程式のみで η̂ = β̂·X を返す（将来情報を使わない運用スコア）."""
@@ -56,7 +58,7 @@ def fit_mimic(df: pd.DataFrame, indicators=OUTCOME_COLS, causes=DEFAULT_CAUSES) 
         model=m, causes=list(causes), indicators=list(indicators),
         loadings=load.set_index("lval")["Estimate"],
         beta=beta.set_index("rval")["Estimate"],
-        params=est, stats=stats.T,
+        params=est, stats=stats.T, n=int(len(data)),
     )
 
 
@@ -345,8 +347,51 @@ OBJECTIVE_STATUS_LABEL = {
     "sign_split": "2 指標の向きが逆（1 つの因子として不整合）",
     "weak": "負荷量が判定に耐えない（識別不能）",
     "improper": "不適切解（標準化負荷量が 1 を超える）",
+    "no_signal": "説明変数に有意なものが無い（スコアはノイズ）",
     "fit_failed": "推定失敗",
 }
+
+
+@dataclass
+class FittedRegression:
+    """1 指標の目的: 指標を説明変数に回帰する（測定モデルが無いので MIMIC は退化して OLS）.
+
+    スコアは MIMIC と同じ形 η̂ = β̂·X。定数項は期ごとの z 化で 0 になるが念のため入れる
+    （スコアには使わない）。
+    """
+    causes: list[str]
+    indicators: list[str]                # 1 本
+    beta: pd.Series = field(default_factory=pd.Series)
+    pvalues: pd.Series = field(default_factory=pd.Series)
+    r2: float = np.nan
+    n: int = 0
+    f_pvalue: float = np.nan             # 全係数 0 の F 検定
+
+    def predict_score(self, X: pd.DataFrame) -> pd.Series:
+        return X[self.causes].fillna(0.0) @ self.beta.reindex(self.causes).fillna(0.0)
+
+
+def fit_regression(df: pd.DataFrame, indicator: str, causes=DEFAULT_CAUSES) -> FittedRegression:
+    cols = [indicator] + list(causes)
+    data = df.dropna(subset=cols)[cols].astype(float)
+    res = sm.OLS(data[indicator].to_numpy(), sm.add_constant(data[list(causes)].to_numpy())).fit()
+    names = ["const"] + list(causes)
+    beta = pd.Series(res.params, index=names).drop("const")
+    pv = pd.Series(res.pvalues, index=names).drop("const")
+    return FittedRegression(list(causes), [indicator], beta, pv, float(res.rsquared), int(res.nobs),
+                            float(res.f_pvalue))
+
+
+def summarize_regression(f: FittedRegression) -> str:
+    lines = [f"[regression] {f.indicators[0]} ~ causes (z 化済みデータの係数)"]
+    for c in f.causes:
+        lines.append(f"  {c:<16} β={f.beta[c]:+.3f}  p={_p(f.pvalues[c])}")
+    lines.append(f"[fit] R2={f.r2:.3f}, F-test p={_p(f.f_pvalue)}, n={f.n}")
+    return "\n".join(lines)
+
+
+def summarize_fitted(f) -> str:
+    return summarize_regression(f) if isinstance(f, FittedRegression) else summarize(f)
 
 
 @dataclass
@@ -355,7 +400,7 @@ class ObjectiveFactor:
     indicators: list[str]
     status: str                      # OBJECTIVE_STATUS_LABEL のキー
     reason: str
-    fitted: FittedMIMIC | None = None
+    fitted: FittedMIMIC | FittedRegression | None = None
 
 
 @dataclass
@@ -401,15 +446,35 @@ def _assess_factor(f: FittedMIMIC, min_abs_loading: float, alpha: float) -> tupl
         return "weak", "判定に耐えない指標: " + ", ".join(
             f"{i} λ={lam[i]:+.3f} p={p[i]:.3g}" if np.isfinite(p[i]) else f"{i} λ={lam[i]:+.3f} p=-"
             for i in weak)
+    # 構造方程式に信号が無ければスコアはノイズ。説明変数が多いと偶然の 5% 有意が
+    # 出やすいので Bonferroni（alpha / 本数）で見る
+    b = f.params[(f.params["op"] == "~") & (f.params["lval"] == "quality")
+                 & (f.params["rval"].isin(f.causes))]
+    if not (b["p-value"].map(_pval) < alpha / max(len(f.causes), 1)).any():
+        return "no_signal", "説明変数に有意なものが無い（Bonferroni p>=%.2g/%d）" % (alpha, len(f.causes))
     return "ok", chk.reason
+
+
+def _assess_regression(f: FittedRegression, alpha: float) -> tuple[str, str]:
+    """回帰には測定モデルが無いので, 判定は「説明変数に信号があるか」（全係数 0 の F 検定）だけ."""
+    if f.beta.isna().any() or not np.isfinite(f.f_pvalue):
+        return "fit_failed", "係数が得られない"
+    # 信号が 1 本に集中していると F 検定は弱いので、Bonferroni の個別検定でも通す
+    k = max(len(f.causes), 1)
+    strong = [c for c in f.causes if np.isfinite(f.pvalues[c]) and f.pvalues[c] < alpha / k]
+    if f.f_pvalue >= alpha and not strong:
+        return "no_signal", "説明変数に信号が無い（F 検定 p=%.2g, Bonferroni 個別も無し）" % f.f_pvalue
+    sig = [c for c in f.causes if np.isfinite(f.pvalues[c]) and f.pvalues[c] < alpha]
+    return "ok", "F 検定 p=%.2g。有意な説明変数: %s" % (f.f_pvalue, ", ".join(sig) if sig else "（個別には無し）")
 
 
 def fit_objective_factors(df: pd.DataFrame, objectives: dict[str, list[str]] = OBJECTIVES,
                           causes=DEFAULT_CAUSES,
                           min_abs_loading: float = SIGN_SPLIT_MIN_ABS_LOADING,
                           alpha: float = SIGN_SPLIT_ALPHA) -> ObjectiveFactors:
-    """目的ごとに 2 指標の MIMIC を別々に推定し, 因子ごとに使えるかを判定する.
+    """目的ごとに別々に推定し, 目的ごとに使えるかを判定する.
 
+    2 指標以上の目的は 1 因子の MIMIC、1 指標の目的は説明変数への回帰。
     別々に推定する理由: 因子間の相関が 0.1 程度しか無いので同時推定しても β̂ はほぼ
     変わらず, 一方で識別不能な因子が他の因子の推定を巻き込まない。
     適合度の参考には `fit_objective_model_joint` で同時推定できる。
@@ -417,25 +482,38 @@ def fit_objective_factors(df: pd.DataFrame, objectives: dict[str, list[str]] = O
     out: dict[str, ObjectiveFactor] = {}
     for name, inds in objectives.items():
         try:
-            f = fit_mimic(df, list(inds), causes)
+            if len(inds) == 1:
+                f = fit_regression(df, inds[0], causes)
+                status, reason = _assess_regression(f, alpha)
+            else:
+                f = fit_mimic(df, list(inds), causes)
+                status, reason = _assess_factor(f, min_abs_loading, alpha)
         except Exception as e:  # 収束失敗・特異行列など
             out[name] = ObjectiveFactor(name, list(inds), "fit_failed",
                                         f"{type(e).__name__}: {str(e)[:120]}")
             continue
-        status, reason = _assess_factor(f, min_abs_loading, alpha)
         out[name] = ObjectiveFactor(name, list(inds), status, reason, f)
     return ObjectiveFactors(out, list(causes))
 
 
 def objective_model_spec(objectives: dict[str, list[str]] = OBJECTIVES,
                          causes=DEFAULT_CAUSES) -> str:
-    """3 因子を同時に置いた MIMIC の仕様（適合度の参考用）.
+    """全目的を同時に置いたモデルの仕様（適合度の参考用）.
 
-    因子間の残差共分散は明示する（2 因子の場合と同じ理由。semopy は自動で追加しない）。
+    1 指標の目的は負荷量 1・残差分散 0 の潜在変数にする（`q =~ 1*y`, `y ~~ 0*y`）。
+    semopy は潜在変数と観測内生変数の残差共分散を受け付けないため、観測変数のまま
+    回帰すると目的間の残差共分散を置けない。
+    目的間の残差共分散は明示する（2 因子の場合と同じ理由。semopy は自動で追加しない）。
     """
     c = " + ".join(causes)
     names = list(objectives)
-    lines = [f"{n} =~ {' + '.join(inds)}" for n, inds in objectives.items()]
+    lines = []
+    for n, inds in objectives.items():
+        if len(inds) > 1:
+            lines.append(f"{n} =~ {' + '.join(inds)}")
+        else:
+            lines.append(f"{n} =~ 1*{inds[0]}")
+            lines.append(f"{inds[0]} ~~ 0*{inds[0]}")
     lines += [f"{n} ~ {c}" for n in names]
     lines += [f"{a} ~~ {b}" for i, a in enumerate(names) for b in names[i + 1:]]
     return "\n".join(lines) + "\n"
@@ -443,7 +521,7 @@ def objective_model_spec(objectives: dict[str, list[str]] = OBJECTIVES,
 
 def fit_objective_model_joint(df: pd.DataFrame, objectives: dict[str, list[str]] = OBJECTIVES,
                               causes=DEFAULT_CAUSES) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """3 因子の同時推定. 返り値は (適合度, inspect の推定値表). スコアには使わない."""
+    """全目的の同時推定. 返り値は (適合度, inspect の推定値表). スコアには使わない."""
     cols = [i for inds in objectives.values() for i in inds] + list(causes)
     data = df.dropna(subset=cols)[cols].astype(float)
     m = semopy.Model(objective_model_spec(objectives, causes))
@@ -452,7 +530,7 @@ def fit_objective_model_joint(df: pd.DataFrame, objectives: dict[str, list[str]]
 
 
 def factor_residual_correlations(est: pd.DataFrame, objectives: dict[str, list[str]] = OBJECTIVES) -> pd.DataFrame:
-    """同時推定の因子間残差相関（標準化した `a ~~ b`）を行列にする."""
+    """同時推定の目的間残差相関（標準化した `a ~~ b`）を目的名の行列にする."""
     names = list(objectives)
     out = pd.DataFrame(np.eye(len(names)), index=names, columns=names)
     rows = est[(est["op"] == "~~") & est["lval"].isin(names) & est["rval"].isin(names)]
@@ -469,7 +547,7 @@ def summarize_objectives(o: ObjectiveFactors) -> str:
                      f"{OBJECTIVE_STATUS_LABEL[fo.status]} ===")
         lines.append(f"  {fo.reason}")
         if fo.fitted is not None:
-            lines.append(summarize(fo.fitted))
+            lines.append(summarize_fitted(fo.fitted))
         lines.append("")
     lines.append("使える因子: " + (", ".join(o.usable) if o.usable else "なし"))
     return "\n".join(lines)

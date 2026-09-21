@@ -25,17 +25,24 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   公開段階で TDnet/EDINET の一次情報へ切替。
 - 統合の重み付けは「潜在因子モデルでデータから推定」を選択済み（効用関数方式・利用者調整方式は不採用）
   → 実データで共通因子が無く成立しなかった。**統合自体をしない**（等ウェイト合成も不採用, 2026-09-21）
-- **目的別 3 因子（決定 2026-09-21）**: `q_ret =~ ret_6m + ret_12m`, `q_dpu =~ dpu_stab + dpu_growth`,
-  `q_rate =~ rate_resil + dd_resil`。各因子を 2 指標の MIMIC として**別々に**推定する
-  （`model.fit_objective_factors`, 指標の対応は `features.OBJECTIVES`）
-  - 別々に推定する理由: 因子間相関が 0.1 程度なので同時推定しても β̂ はほぼ同じで、
-    識別不能な因子が他を巻き込まない。同時推定は適合度の参考にだけ使う（`fit_objective_model_joint`）
+- **目的別の推定（決定 2026-09-21, 同日に 4 目的へ変更）**: `q_ret =~ ret_6m + ret_12m`,
+  `q_stab: dpu_stab`, `q_grow: dpu_growth`, `q_rate =~ rate_resil + dd_resil`。
+  2 指標の目的は 1 因子の MIMIC、1 指標の目的は説明変数への回帰（MIMIC が退化した形。
+  スコアは同じ η̂ = β̂·X）。目的ごとに**別々に**推定する
+  （`model.fit_objective_factors`, 指標の対応は `features.OBJECTIVES`, 表示名は `OBJECTIVE_LABELS`）
+  - 分配金を 2 目的に分けた理由: dpu_stab と dpu_growth は相関 0.06 で、2 指標の因子 `q_dpu` は
+    実データで識別不能だった（dpu_stab の標準化負荷量が 1.00 の境界解、dpu_growth p=0.17）
+  - 別々に推定する理由: 目的間の残差相関が 0.1 程度なので同時推定しても β̂ はほぼ同じで、
+    識別不能な目的が他を巻き込まない。同時推定は適合度の参考にだけ使う（`fit_objective_model_joint`。
+    1 指標の目的は `q =~ 1*y` と `y ~~ 0*y` で潜在変数にする。semopy は潜在変数と観測内生変数の
+    残差共分散を受け付けない）
   - 2 指標の因子は説明変数との共分散を通じてしか自由な負荷量が識別されない
-    （cov(y2,x)/cov(y1,x)=λ2）。因子ごとに判定し、`ok` 以外はスコアを出さない:
+    （cov(y2,x)/cov(y1,x)=λ2）。目的ごとに判定し、`ok` 以外はスコアを出さない:
     `sign_split`（2 指標の向きが逆）, `weak`（|λ|<0.15 か p>=0.05 か SE が出ない = 識別不能）,
-    `improper`（標準化負荷量 > 1）, `fit_failed`
-  - 検証は `validation.rolling_validation(objectives=OBJECTIVES)`。因子ごとに担当指標で IC と
-    五分位スプレッドを出し、期ごとの判定を `status_<因子>` に残す
+    `improper`（標準化負荷量 > 1）, `no_signal`（構造方程式に信号が無い。因子は Bonferroni の
+    個別検定、回帰は F 検定または Bonferroni の個別検定）, `fit_failed`
+  - 検証は `validation.rolling_validation(objectives=OBJECTIVES)`。目的ごとに担当指標で IC と
+    五分位スプレッドを出し、期ごとの判定を `status_<目的>` に残す
   - 符号判定 + 2 因子分岐（`fit_with_sign_branch`）は合成データの検証用に残す。
     実データではこの判定は「割れていない」としか言えず、共通因子の有無は検出できない
     （`tests/test_model.py::test_one_factor_rule_does_not_catch_a_missing_common_factor`）
@@ -84,6 +91,13 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   `.github/workflows/pages.yml`）。財務省の10年債利回りを月末値にして描画する。
   接続済みの系列だけを出し、未接続の指標は「未接続」と表示する。
   合成データの数値は公開しない
+- 実装済み: 目的別スコアの掲載（`jreit_score/publish.py`）。`pages.yml` が J-Quants の store を
+  cache から復元して推定し、銘柄別の z 値（掲載銘柄間で標準化）と五分位、係数 β̂、時系列検証の IC を
+  `site/data.json` の `scores` に入れる。価格・分配金・BPS・時価総額・NAV 倍率の値は出さない
+  （`publish.check_payload` と pages.yml の確認ステップで構造を固定）。銘柄名は J-Quants の
+  銘柄マスタの名称を使う（決定 2026-09-21）。表示は z スコア（小数 2 桁）+ 五分位（5 が上位）。
+  識別できない目的は「識別不能・非掲載」と表示する。スコアの基準日は価格の最終営業日で、
+  説明変数はその日時点の as-of 値。合成データでの表示確認は Playwright で実施（scratchpad）
 - 動作確認済み: 目的別 3 因子を実データで推定（fit-model run #3, 2026-09-21）。q_ret / q_rate は推定可、
   q_dpu は識別不能（結果はタスク 4 に記載）
 - 未実装: 合併/上場廃止銘柄の復元（生存者バイアス対策）、日次スナップショット蓄積の Actions、
@@ -103,8 +117,9 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
   - `inspect-jgb.yml` 財務省 CSV の構造確認
   - `probe-jquants.yml` J-Quants のエンドポイントと認証ヘッダの確認。
     `JQUANTS_API_KEY` / `JQUANTS_API` のどちらかが必要
-  - `pages.yml` GitHub Pages へのデプロイ。財務省 CSV から `site/data.json` を生成して公開する。
-    公開前に「jgb10 以外の数値系列が無いこと」を検証する
+  - `pages.yml` GitHub Pages へのデプロイ。財務省 CSV と J-Quants の store（cache, 無ければ失敗）から
+    `site/data.json` を生成して公開する。公開前に「数値系列は jgb10 だけ」「scores の行は
+    code / name / 目的ごとの {z, q} だけ」「生データのキーが無い」ことを検証する
   - `fetch-jquants.yml` J-Quants の差分取得と cache 保存。出力は件数・期間・サイズのみ
 
 ## 次のタスク（優先順）
@@ -169,8 +184,8 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
        q_ret ok=11: IC ret_6m +0.24 (NW-t 4.2), ret_12m +0.39 (4.9), composite +0.33 (4.5), q5−q1 +1.01 (6.7)
        q_rate ok=11: IC rate_resil +0.17 (3.0), dd_resil +0.17 (8.4), composite +0.16 (4.0), q5−q1 +0.53 (6.9)
        q_dpu weak=7 / ok=4: ok の 4 期だけで IC dpu_stab +0.27, dpu_growth −0.01, q5−q1 +0.05 (0.6)。信頼できない
-     - 未決: q_dpu の扱い（説明変数が揃うまで「識別不能・非掲載」のまま / 安定性と成長を別々の目的にする /
-       指標定義の見直し）と、q_ret・q_rate のダッシュボード掲載
+     - **決定（2026-09-21）: 分配金は安定性と成長を別々の目的にする（4 目的）**。q_ret / q_rate は
+       ダッシュボードに掲載する（実装済み。実データでの 4 目的の結果は下記）
 5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積
    （生データはコミットしない）と、スコア算出後のダッシュボード掲載
 
@@ -189,7 +204,8 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - `jreit_score/panel.py` 説明変数の整形
 - `jreit_score/synthetic.py` 合成データ
 - `jreit_score/run_real.py` 実データでの推定（目的別 3 因子）と診断（`indicator_structure`）
-- `jreit_score/site.py` 公開ダッシュボード用 JSON の組み立て
+- `jreit_score/site.py` 公開ダッシュボード用 JSON の組み立て（`--data` で目的別スコアを載せる）
+- `jreit_score/publish.py` 目的別スコアの payload（派生値のみ）と構造チェック
 - `site/index.html` 公開ダッシュボード（`site/data.json` は生成物なのでコミットしない）
 
 ## 実行
@@ -206,6 +222,7 @@ PYTHONPATH=. python tests/test_jquants_store.py
 PYTHONPATH=. python tests/test_site.py
 PYTHONPATH=. python tests/test_jquants_panel.py
 PYTHONPATH=. python tests/test_run_real.py
+PYTHONPATH=. python tests/test_publish.py
 ```
 
 ## 会話上の約束

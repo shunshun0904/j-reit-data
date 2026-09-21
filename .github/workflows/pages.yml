@@ -2,7 +2,9 @@
 #
 # 公開するのは派生値のみ（CLAUDE.md「制約・注意」）:
 # - 財務省 国債金利情報から10年債利回りを取得し、月末値に落として JSON にする
-# - JAPAN-REIT.COM と J-Quants の生データは公開しない。現在どちらも未接続
+# - J-Quants の store（cache）から目的別モデルを推定し、銘柄別スコア（z 値と五分位）、
+#   係数、時系列検証の IC だけを JSON にする。価格・分配金・BPS・時価総額は出さない
+# - JAPAN-REIT.COM の生データは公開しない（未接続）
 # - 合成データの数値は公開しない。未接続の指標はページ上で「未接続」と表示する
 #
 # Pages の公開元は Actions（リポジトリ設定側で選択済み）。
@@ -39,9 +41,19 @@ jobs:
           set -euo pipefail
           PYTHONPATH=. python tests/test_site.py
           PYTHONPATH=. python tests/test_jgb.py
+          PYTHONPATH=. python tests/test_publish.py
 
-      - name: 財務省 CSV から data.json を生成
-        run: PYTHONPATH=. python -m jreit_score.site --out site
+      - name: J-Quants の store を cache から復元（v2）
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jquants
+          key: jquants-v2-none
+          restore-keys: |
+            jquants-v2-
+          fail-on-cache-miss: true
+
+      - name: 財務省 CSV と store から data.json を生成
+        run: PYTHONPATH=. python -m jreit_score.site --out site --data data/jquants
 
       - name: 公開物の確認
         run: |
@@ -49,16 +61,25 @@ jobs:
           ls -la site/
           PYTHONPATH=. python - <<'PY'
           import json, pathlib, sys
+          from jreit_score.publish import check_payload
           d = json.loads(pathlib.Path("site/data.json").read_text(encoding="utf-8"))
-          assert set(d) == {"generated_at", "jgb10", "status"}, sorted(d)
+          assert set(d) == {"generated_at", "jgb10", "status", "scores"}, sorted(d)
           pts = d["jgb10"]["points"]
           assert len(pts) > 100, f"月末値が少なすぎる: {len(pts)}"
           assert d["jgb10"]["source_url"].startswith("https://www.mof.go.jp/")
-          # スコアが未接続のうちは jgb10 以外の数値系列を出さない
+          # 数値系列は jgb10 だけ。スコアは銘柄別の z 値と五分位だけで、生データのキーを含まない
           series = [k for k, v in d.items() if isinstance(v, dict) and "points" in v]
           assert series == ["jgb10"], series
+          sc = d["scores"]
+          assert set(sc) == {"as_of", "fit", "causes", "objectives", "columns", "rows"}, sorted(sc)
+          check_payload(sc)
+          assert len(sc["rows"]) >= 50, len(sc["rows"])
+          rows_text = json.dumps(sc["rows"], ensure_ascii=False)
+          for bad in ("nav_ratio", "log_mcap", "close", "bps", "mktcap", "dpu", "dividend"):
+              assert bad not in rows_text, bad
           print(f"OK 月末値 {len(pts)} 点: {pts[0][0]} 〜 {pts[-1][0]}")
           print("   状態:", {s["item"]: s["state"] for s in d["status"]})
+          print(f"   スコア: 基準日 {sc['as_of']}, 掲載列 {sc['columns']}, 行数 {len(sc['rows'])}")
           PY
 
       - uses: actions/configure-pages@v5

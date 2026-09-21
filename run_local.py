@@ -2,7 +2,7 @@
 
   python run_local.py              6指標が同じ向き  → 1因子で統合
   python run_local.py --opposite   安定性2指標が逆向き → 2因子へ分岐
-  python run_local.py --objectives 目的別3因子（合成データは共通因子があるので3因子とも使える）
+  python run_local.py --objectives 目的別（4 目的。合成データでは全目的が使える）
 """
 import sys
 
@@ -18,7 +18,7 @@ panel = make_panel(opposite_sign_for_stability=opposite)
 panel = cross_sectional_standardize(panel, OUTCOME_COLS + DEFAULT_CAUSES)
 
 if "--objectives" in sys.argv:
-    print("=== 目的別 3 因子 (all periods) ===")
+    print("=== 目的別 (all periods) ===")
     print(summarize_objectives(fit_objective_factors(panel)))
     print("\n=== rolling out-of-sample validation (目的別) ===")
     ic, _ = rolling_validation(panel, horizon_periods=2, min_train_periods=8, objectives=OBJECTIVES)
