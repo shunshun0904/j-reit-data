@@ -316,7 +316,7 @@ function renderScores(sc) {
   sub.textContent =
     `基準日 ${sc.as_of}（価格の最終営業日時点の財務指標）。推定期間 ${(f.periods || []).join("〜")}` +
     `（${f.n_periods} 期・${f.n_rows_complete} 行）。説明変数: ` +
-    (sc.causes || []).map(c => `${CAUSE_NAME[c] || c}（${CAUSE_DEF[c] || c}）`).join("、") + `。` +
+    (sc.causes || []).map(c => `${CAUSE_NAME[c] || c} = ${CAUSE_DEF[c] || c}`).join("；") + `。` +
     `掲載 ${f.scored} 銘柄${uns}。`;
 
   // 目的ごとの判定と検証結果
@@ -368,7 +368,7 @@ function drawScoreTable(sc) {
 
 // nav_ratio は 終値 ÷ 1口当たり純資産（BPS, 帳簿ベース）。鑑定評価ベースの一般的な NAV 倍率ではない
 const CAUSE_NAME = { nav_ratio: "NAV倍率（簿価ベース）", log_mcap: "時価総額" };
-const CAUSE_DEF = { nav_ratio: "終値 ÷ 1口当たり純資産（BPS, 帳簿ベース。鑑定評価ベースではない）", log_mcap: "時価総額の対数" };
+const CAUSE_DEF = { nav_ratio: "終値 ÷ 1口当たり純資産（帳簿ベース）。鑑定評価ベースではない", log_mcap: "時価総額の対数" };
 const CAUSE_ADJ = { nav_ratio: ["高め", "低め"], log_mcap: ["大きめ", "小さめ"] };
 
 function renderMap(sc) {
