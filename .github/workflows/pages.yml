@@ -82,6 +82,13 @@ jobs:
           print(f"   スコア: 基準日 {sc['as_of']}, 掲載列 {sc['columns']}, 行数 {len(sc['rows'])}")
           PY
 
+      # 公開する JSON をそのままログにも残す（公開物と同一の派生値。手元で描画を確認するため）
+      - name: 公開する data.json をログに記録
+        run: |
+          echo "::group::site/data.json"
+          cat site/data.json; echo
+          echo "::endgroup::"
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3

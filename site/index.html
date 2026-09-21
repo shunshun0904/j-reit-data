@@ -109,6 +109,10 @@
   .q4 { background: rgba(var(--tint), .32); }
   .q5 { background: rgba(var(--tint), .45); font-weight: 600; }
   .scroll-tall { max-height: 520px; }
+  .ell { fill: rgba(var(--tint), .09); stroke: rgba(var(--tint), .35); stroke-width: 1; }
+  .ell-label { font-size: 11px; fill: var(--text-secondary); }
+  .pt { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
+  .pt-label { font-size: 11px; fill: var(--text-secondary); }
   th.num { text-align: right; }
   .sr-only {
     position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -151,6 +155,19 @@
       </table>
     </div>
     <p class="note" id="scores-note"></p>
+  </section>
+
+  <section class="card" id="map-card">
+    <h2 id="map-title">2次元マップ（将来リターン × 金利上昇耐性）</h2>
+    <p class="sub" id="map-sub">読み込み中…</p>
+    <figure>
+      <div class="plot">
+        <svg id="map" viewBox="0 0 860 560" role="img" aria-labelledby="map-title map-desc"></svg>
+        <p class="sr-only" id="map-desc">将来リターンと金利上昇耐性のモデル推定値（z スコア）を2軸に取った散布図。各点は銘柄で、数値は上の表で確認できます。</p>
+        <div class="tip" id="map-tip"></div>
+      </div>
+      <figcaption id="map-caption"></figcaption>
+    </figure>
   </section>
 
   <section class="card">
@@ -348,6 +365,115 @@ function drawScoreTable(sc) {
     }).join("") + `</tr>`).join("");
 }
 
+const CAUSE_NAME = { nav_ratio: "NAV倍率", log_mcap: "時価総額" };
+const CAUSE_ADJ = { nav_ratio: ["高め", "低め"], log_mcap: ["大きめ", "小さめ"] };
+
+function renderMap(sc) {
+  const svg = document.getElementById("map"), sub = document.getElementById("map-sub");
+  const cap = document.getElementById("map-caption");
+  const kx = "q_ret", ky = "q_rate";
+  if (!sc || !(sc.columns || []).includes(kx) || !(sc.columns || []).includes(ky)) {
+    sub.textContent = "将来リターンと金利上昇耐性の両方が掲載されているときに表示します。";
+    svg.innerHTML = ""; cap.textContent = ""; return;
+  }
+  const ox = sc.objectives[kx], oy = sc.objectives[ky];
+  const pts = sc.rows.filter(r => r[kx] && r[ky] && r[kx].z != null && r[ky].z != null)
+    .map(r => ({ code: r.code, name: r.name, x: r[kx].z, y: r[ky].z, qx: r[kx].q, qy: r[ky].q }));
+  if (pts.length < 5) { sub.textContent = "銘柄数が足りないため表示しません。"; svg.innerHTML = ""; return; }
+
+  // 各スコアで |β̂| が最大の説明変数と符号。軸の意味と象限のラベルはここから作る（符号が変わっても追随）
+  const dom = o => {
+    const e = Object.entries(o.beta || {}).filter(([, v]) => v != null)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
+    return e ? { c: e[0], s: Math.sign(e[1]) || 1, b: e[1] } : null;
+  };
+  const dx = dom(ox), dy = dom(oy);
+  const adj = (d, side) => {
+    if (!d) return "";
+    const a = CAUSE_ADJ[d.c] || ["高め", "低め"];
+    return `${CAUSE_NAME[d.c] || d.c}が${(d.s * side) > 0 ? a[0] : a[1]}`;
+  };
+  sub.textContent =
+    `横軸: ${ox.label} スコア z（主に ${dx ? CAUSE_NAME[dx.c] || dx.c : "–"}、β̂ ${dx ? fz(dx.b) : "–"}）、` +
+    `縦軸: ${oy.label} スコア z（主に ${dy ? CAUSE_NAME[dy.c] || dy.c : "–"}、β̂ ${dy ? fz(dy.b) : "–"}）。` +
+    `基準日 ${sc.as_of}、${pts.length} 銘柄。楕円は各象限の銘柄の平均 ±1.5 標準偏差で、おおまかな領域を示すだけのものです。`;
+
+  const narrow = (svg.parentElement.clientWidth || 860) < 560;
+  const W = narrow ? 480 : 860, H = narrow ? 520 : 560, m = { t: 18, r: 18, b: 44, l: 44 };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const lim = Math.max(2.5, Math.ceil(Math.max(...pts.map(p => Math.max(Math.abs(p.x), Math.abs(p.y)))) * 1.15 * 2) / 2);
+  const X = v => m.l + (v + lim) / (2 * lim) * iw;
+  const Y = v => m.t + ih - (v + lim) / (2 * lim) * ih;
+  const g = [];
+  for (let v = -Math.floor(lim); v <= lim; v += 1) {
+    g.push(`<line x1="${X(v).toFixed(1)}" y1="${m.t}" x2="${X(v).toFixed(1)}" y2="${m.t + ih}" stroke="${C('--grid')}" stroke-width="1"/>`);
+    g.push(`<line x1="${m.l}" y1="${Y(v).toFixed(1)}" x2="${W - m.r}" y2="${Y(v).toFixed(1)}" stroke="${C('--grid')}" stroke-width="1"/>`);
+    g.push(`<text x="${X(v).toFixed(1)}" y="${H - 24}" text-anchor="middle" font-size="11" fill="${C('--text-muted')}">${v > 0 ? "+" : ""}${v}</text>`);
+    g.push(`<text x="${m.l - 8}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="${C('--text-muted')}">${v > 0 ? "+" : ""}${v}</text>`);
+  }
+  // 象限ごとの楕円（平均 ±1.5 標準偏差）と説明ラベル
+  const sd = a => { const mu = a.reduce((s, v) => s + v, 0) / a.length; return Math.sqrt(a.reduce((s, v) => s + (v - mu) ** 2, 0) / Math.max(a.length - 1, 1)); };
+  const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+  const ells = [], labels = [];
+  for (const sx of [1, -1]) for (const sy of [1, -1]) {
+    const q = pts.filter(p => Math.sign(p.x) === sx && Math.sign(p.y) === sy);
+    if (q.length >= 3) {
+      const cx = mean(q.map(p => p.x)), cy = mean(q.map(p => p.y));
+      const rx = Math.max(1.5 * sd(q.map(p => p.x)), 0.35), ry = Math.max(1.5 * sd(q.map(p => p.y)), 0.35);
+      ells.push(`<ellipse class="ell" cx="${X(cx).toFixed(1)}" cy="${Y(cy).toFixed(1)}" rx="${(rx / (2 * lim) * iw).toFixed(1)}" ry="${(ry / (2 * lim) * ih).toFixed(1)}"/>`);
+    }
+    // ラベルは象限の隅に固定する（点や楕円の上に重ねない）。1 行目が横軸、2 行目が縦軸の意味
+    const lx = sx > 0 ? W - m.r - 6 : m.l + 6, anchor = sx > 0 ? "end" : "start";
+    const ly = sy > 0 ? m.t + 28 : m.t + ih - 22;
+    labels.push(`<text class="ell-label" x="${lx}" y="${ly}" text-anchor="${anchor}">` +
+                `<tspan x="${lx}" dy="0">${esc(adj(dx, sx))}</tspan>` +
+                `<tspan x="${lx}" dy="14">${esc(adj(dy, sy))}（${q.length} 銘柄）</tspan></text>`);
+  }
+  const axes =
+    `<line x1="${X(0).toFixed(1)}" y1="${m.t}" x2="${X(0).toFixed(1)}" y2="${m.t + ih}" stroke="${C('--axis')}" stroke-width="1"/>` +
+    `<line x1="${m.l}" y1="${Y(0).toFixed(1)}" x2="${W - m.r}" y2="${Y(0).toFixed(1)}" stroke="${C('--axis')}" stroke-width="1"/>` +
+    `<text x="${W - m.r}" y="${H - 6}" text-anchor="end" font-size="11" fill="${C('--text-secondary')}">${esc(ox.label)} スコア z →</text>` +
+    `<text x="${m.l + 6}" y="${m.t + 10}" font-size="11" fill="${C('--text-secondary')}">↑ ${esc(oy.label)} スコア z</text>`;
+  const circles = pts.map((p, i) => `<circle class="pt" data-i="${i}" cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="5"/>`).join("");
+  // 直接ラベルは各軸の両端の銘柄だけ（全点に付けない）
+  const ext = new Set();
+  for (const key of ["x", "y"]) {
+    let hi = 0, lo = 0;
+    pts.forEach((p, i) => { if (p[key] > pts[hi][key]) hi = i; if (p[key] < pts[lo][key]) lo = i; });
+    ext.add(hi); ext.add(lo);
+  }
+  const direct = [...ext].map(i => {
+    const p = pts[i], right = X(p.x) < W - m.r - 70;
+    return `<text class="pt-label" x="${(X(p.x) + (right ? 8 : -8)).toFixed(1)}" y="${(Y(p.y) + 4).toFixed(1)}" text-anchor="${right ? "start" : "end"}">${esc(p.code)}</text>`;
+  }).join("");
+  svg.innerHTML = g.join("") + ells.join("") + axes + circles + direct + labels.join("");
+  cap.textContent = `各点は銘柄（${pts.length}）。位置はモデル推定値で、実測値ではありません。ラベルの「高め・低め」はその象限の説明変数の傾向を表す記述で、評価や推奨ではありません。`;
+
+  // ホバー: 最寄りの点
+  const tip = document.getElementById("map-tip"), plot = svg.parentElement;
+  const cs = svg.querySelectorAll("circle.pt");
+  function move(ev) {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) / r.width * W;
+    const py = ((ev.touches ? ev.touches[0].clientY : ev.clientY) - r.top) / r.height * H;
+    let best = -1, bd = Infinity;
+    pts.forEach((p, i) => { const d = (X(p.x) - px) ** 2 + (Y(p.y) - py) ** 2; if (d < bd) { bd = d; best = i; } });
+    if (best < 0 || bd > 40 ** 2) { leave(); return; }
+    const p = pts[best];
+    cs.forEach(c => c.setAttribute("r", "5")); cs[best].setAttribute("r", "7");
+    tip.innerHTML = `${esc(p.code)} ${esc(p.name)}<br>${esc(ox.label)} <b>${fz(p.x)}</b>（五分位 ${p.qx ?? "–"}）` +
+                    `<br>${esc(oy.label)} <b>${fz(p.y)}</b>（五分位 ${p.qy ?? "–"}）`;
+    tip.style.opacity = "1";
+    const sx = X(p.x) / W * r.width, sy = Y(p.y) / H * r.height;
+    tip.style.left = Math.min(Math.max(sx - tip.offsetWidth / 2, 0), r.width - tip.offsetWidth) + "px";
+    tip.style.top = Math.max(sy - tip.offsetHeight - 14, 0) + "px";
+  }
+  function leave() { tip.style.opacity = "0"; cs.forEach(c => c.setAttribute("r", "5")); }
+  plot.onmousemove = move; plot.onmouseleave = leave;
+  plot.ontouchstart = move; plot.ontouchmove = move; plot.ontouchend = leave;
+}
+
 fetch("data.json").then(r => r.json()).then(j => {
   DATA = j;
   document.getElementById("status-body").innerHTML = j.status.map(s => {
@@ -364,6 +490,7 @@ fetch("data.json").then(r => r.json()).then(j => {
     `出典: <a href="${j.jgb10.source_url}" rel="noopener">${j.jgb10.source}</a>`;
   document.getElementById("generated").textContent = "最終更新: " + j.generated_at;
   renderScores(j.scores);
+  renderMap(j.scores);
   render();
 }).catch(e => {
   document.getElementById("chart-sub").textContent = "データを読み込めませんでした: " + e;
@@ -377,7 +504,7 @@ document.querySelectorAll(".controls button").forEach(b => {
     if (DATA) render();
   });
 });
-window.addEventListener("resize", () => { if (DATA) render(); });
+window.addEventListener("resize", () => { if (DATA) { render(); renderMap(DATA.scores); } });
 </script>
 </body>
 </html>
