@@ -11,8 +11,14 @@ name: probe-jquants
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "discover=応答の形を確認 / census=全 J-REIT の決算期間分布と除外銘柄を数える"
+        required: false
+        default: discover
+        type: choice
+        options: [discover, census]
       codes:
-        description: "確認する銘柄コード（4桁, スペース区切り）"
+        description: "mode=discover のとき確認する銘柄コード（4桁, スペース区切り）"
         required: false
         default: "8985 8951"
 
@@ -49,8 +55,17 @@ jobs:
         run: PYTHONPATH=. python tests/test_jquants.py
 
       - name: 実応答の形を確認
+        if: ${{ inputs.mode == 'discover' }}
         env:
           JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
           JQUANTS_API: ${{ secrets.JQUANTS_API }}
           CODES: ${{ inputs.codes }}
         run: PYTHONPATH=. python -m jreit_score.ingest.jquants --discover --codes $CODES
+
+      # 58 銘柄 × 1 リクエスト（＋ページング）。銘柄間 0.5 秒で 1 分程度
+      - name: 全 J-REIT の決算期間分布と除外銘柄を数える
+        if: ${{ inputs.mode == 'census' }}
+        env:
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+          JQUANTS_API: ${{ secrets.JQUANTS_API }}
+        run: PYTHONPATH=. python -m jreit_score.ingest.jquants --census
