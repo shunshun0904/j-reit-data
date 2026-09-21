@@ -30,6 +30,7 @@ jobs:
         run: |
           PYTHONPATH=. python tests/test_jquants_panel.py
           PYTHONPATH=. python tests/test_model.py
+          PYTHONPATH=. python tests/test_run_real.py
 
       - name: store を cache から復元（v2）
         uses: actions/cache/restore@v4

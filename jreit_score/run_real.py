@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .features import OUTCOME_COLS, build_outcomes
@@ -35,6 +36,24 @@ def coverage(panel: pd.DataFrame, cols: list[str]) -> pd.Series:
               .reindex(sorted(panel["period"].unique()), fill_value=0))
 
 
+def indicator_structure(panel: pd.DataFrame, indicators: list[str] = OUTCOME_COLS,
+                        causes: list[str] = JQ_CAUSES) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
+    """横断面 z 化後の行をプールした Spearman 相関（指標間・指標×説明変数）と、
+    指標間相関行列の固有値（降順）.
+
+    1因子で統合できるなら第1固有値だけが大きい。目的ごとに別の因子があるなら
+    2番目以降も 1 を超える（Kaiser 基準）。負荷量の符号判定だけでは見えない
+    「符号は割れないが共通因子が無い」ケースをここで確かめる。
+    """
+    cols = list(indicators) + list(causes)
+    usable = panel.dropna(subset=cols)
+    corr = usable[cols].corr(method="spearman")
+    among = corr.loc[list(indicators), list(indicators)]
+    with_causes = corr.loc[list(indicators), list(causes)]
+    eig = np.sort(np.linalg.eigvalsh(among.to_numpy()))[::-1]
+    return among, with_causes, eig
+
+
 def main(data: str, start: str, end: str, min_train: int) -> None:
     store = load(Path(data))
     if store.prices.empty or store.dpu.empty:
@@ -55,6 +74,15 @@ def main(data: str, start: str, end: str, min_train: int) -> None:
     panel = cross_sectional_standardize(panel, cols)
     usable = panel.dropna(subset=cols)
     print(f"\n推定に使う行: {len(usable)}（{usable['period'].nunique()} 期 × 最大 {usable.groupby('period').size().max()} 銘柄）")
+
+    among, with_causes, eig = indicator_structure(panel)
+    print("\n=== 指標の相関構造（横断面 z 化後をプール, Spearman） ===")
+    print("指標間:")
+    print(among.round(2).to_string())
+    print("固有値（降順）: " + ", ".join(f"{v:.2f}" for v in eig)
+          + f"  （1 を超える数 = {int((eig > 1).sum())}）")
+    print("指標 × 説明変数:")
+    print(with_causes.round(2).to_string())
 
     print("\n=== in-sample fit (全期間, causes = nav_ratio + log_mcap) ===")
     b = fit_with_sign_branch(panel, causes=JQ_CAUSES)
