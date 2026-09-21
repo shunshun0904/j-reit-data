@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import semopy
 
-from .features import OUTCOME_COLS
+from .features import OBJECTIVES, OUTCOME_COLS
 
 DEFAULT_CAUSES = ["nav_ratio", "ltv", "fixed_rate_ratio", "unrealized_gain",
                   "noi_yield", "occupancy", "log_mcap"]
@@ -325,4 +325,151 @@ def summarize_branch(b: BranchResult) -> str:
              "", f"=== 符号判定: {label} ===", f"  {b.sign_check.reason}"]
     if b.two_factor is not None:
         lines += ["", "=== 2因子モデル ===", summarize_two_factor(b.two_factor)]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 目的別の因子（決定 2026-09-21）
+#
+# 実データでは 6 指標に共通因子が無かった（目的をまたぐ Spearman 相関が全て 0.10 以下、
+# 固有値 1.81 / 1.50 / 1.05）。符号判定は「割れていない」と言うだけで、統合できるとは
+# 言わない。そこで目的ごとに 2 指標の MIMIC を別々に推定し、統合スコアは作らない。
+#
+# 2 指標の因子は、説明変数との共分散を通じてしか自由な負荷量が識別されない
+# （cov(y2, x) / cov(y1, x) = λ2）。説明変数が因子を説明しなければ λ は決まらず、
+# 標準誤差が出ないか巨大になる。その因子は「識別不能」として報告し、スコアを出さない。
+# ---------------------------------------------------------------------------
+
+OBJECTIVE_STATUS_LABEL = {
+    "ok": "推定可",
+    "sign_split": "2 指標の向きが逆（1 つの因子として不整合）",
+    "weak": "負荷量が判定に耐えない（識別不能）",
+    "improper": "不適切解（標準化負荷量が 1 を超える）",
+    "fit_failed": "推定失敗",
+}
+
+
+@dataclass
+class ObjectiveFactor:
+    name: str
+    indicators: list[str]
+    status: str                      # OBJECTIVE_STATUS_LABEL のキー
+    reason: str
+    fitted: FittedMIMIC | None = None
+
+
+@dataclass
+class ObjectiveFactors:
+    """目的別因子の推定結果. 統合はしない（共通因子が無い）."""
+    factors: dict[str, ObjectiveFactor]
+    causes: list[str]
+
+    @property
+    def usable(self) -> list[str]:
+        return [n for n, f in self.factors.items() if f.status == "ok"]
+
+    def predict_scores(self, X: pd.DataFrame) -> pd.DataFrame:
+        """推定できた因子だけ η̂ = β̂·X を返す（将来情報を使わない運用スコア）.
+
+        識別不能・不整合の因子は列を出さない（黙って出さない）。
+        """
+        return pd.DataFrame({n: self.factors[n].fitted.predict_score(X) for n in self.usable},
+                            index=X.index)
+
+    def indicator_groups(self) -> dict[str, list[str]]:
+        return {n: list(self.factors[n].indicators) for n in self.usable}
+
+
+def _assess_factor(f: FittedMIMIC, min_abs_loading: float, alpha: float) -> tuple[str, str]:
+    """1 因子の測定モデルがスコアを出せる状態かを判定する."""
+    lam, p = _std_loadings(f.params, f.indicators)
+    if lam.isna().any():
+        return "fit_failed", "負荷量が得られない"
+    if (lam.abs() > 1.0 + 1e-6).any():
+        return "improper", "標準化負荷量が 1 を超える: " + ", ".join(
+            f"{i} λ={lam[i]:+.3f}" for i in f.indicators if abs(lam[i]) > 1.0 + 1e-6)
+    # 第 1 指標は識別のため 1 に固定され p='-'（NaN）。自由な指標の p が NaN なら
+    # 標準誤差が計算できていない＝識別不能
+    free_nan = [i for i in f.indicators[1:] if not np.isfinite(p.get(i, np.nan))]
+    if free_nan:
+        return "weak", "標準誤差が計算できない（識別不能）: " + ", ".join(free_nan)
+    chk = check_sign_split(f, min_abs_loading, alpha)
+    if chk.split:
+        return "sign_split", chk.reason
+    weak = [i for i in f.indicators if i not in chk.decisive]
+    if weak:
+        return "weak", "判定に耐えない指標: " + ", ".join(
+            f"{i} λ={lam[i]:+.3f} p={p[i]:.3g}" if np.isfinite(p[i]) else f"{i} λ={lam[i]:+.3f} p=-"
+            for i in weak)
+    return "ok", chk.reason
+
+
+def fit_objective_factors(df: pd.DataFrame, objectives: dict[str, list[str]] = OBJECTIVES,
+                          causes=DEFAULT_CAUSES,
+                          min_abs_loading: float = SIGN_SPLIT_MIN_ABS_LOADING,
+                          alpha: float = SIGN_SPLIT_ALPHA) -> ObjectiveFactors:
+    """目的ごとに 2 指標の MIMIC を別々に推定し, 因子ごとに使えるかを判定する.
+
+    別々に推定する理由: 因子間の相関が 0.1 程度しか無いので同時推定しても β̂ はほぼ
+    変わらず, 一方で識別不能な因子が他の因子の推定を巻き込まない。
+    適合度の参考には `fit_objective_model_joint` で同時推定できる。
+    """
+    out: dict[str, ObjectiveFactor] = {}
+    for name, inds in objectives.items():
+        try:
+            f = fit_mimic(df, list(inds), causes)
+        except Exception as e:  # 収束失敗・特異行列など
+            out[name] = ObjectiveFactor(name, list(inds), "fit_failed",
+                                        f"{type(e).__name__}: {str(e)[:120]}")
+            continue
+        status, reason = _assess_factor(f, min_abs_loading, alpha)
+        out[name] = ObjectiveFactor(name, list(inds), status, reason, f)
+    return ObjectiveFactors(out, list(causes))
+
+
+def objective_model_spec(objectives: dict[str, list[str]] = OBJECTIVES,
+                         causes=DEFAULT_CAUSES) -> str:
+    """3 因子を同時に置いた MIMIC の仕様（適合度の参考用）.
+
+    因子間の残差共分散は明示する（2 因子の場合と同じ理由。semopy は自動で追加しない）。
+    """
+    c = " + ".join(causes)
+    names = list(objectives)
+    lines = [f"{n} =~ {' + '.join(inds)}" for n, inds in objectives.items()]
+    lines += [f"{n} ~ {c}" for n in names]
+    lines += [f"{a} ~~ {b}" for i, a in enumerate(names) for b in names[i + 1:]]
+    return "\n".join(lines) + "\n"
+
+
+def fit_objective_model_joint(df: pd.DataFrame, objectives: dict[str, list[str]] = OBJECTIVES,
+                              causes=DEFAULT_CAUSES) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """3 因子の同時推定. 返り値は (適合度, inspect の推定値表). スコアには使わない."""
+    cols = [i for inds in objectives.values() for i in inds] + list(causes)
+    data = df.dropna(subset=cols)[cols].astype(float)
+    m = semopy.Model(objective_model_spec(objectives, causes))
+    m.fit(data)
+    return semopy.calc_stats(m).T, m.inspect(std_est=True)
+
+
+def factor_residual_correlations(est: pd.DataFrame, objectives: dict[str, list[str]] = OBJECTIVES) -> pd.DataFrame:
+    """同時推定の因子間残差相関（標準化した `a ~~ b`）を行列にする."""
+    names = list(objectives)
+    out = pd.DataFrame(np.eye(len(names)), index=names, columns=names)
+    rows = est[(est["op"] == "~~") & est["lval"].isin(names) & est["rval"].isin(names)]
+    for _, r in rows.iterrows():
+        if r["lval"] != r["rval"]:
+            out.loc[r["lval"], r["rval"]] = out.loc[r["rval"], r["lval"]] = float(r["Est. Std"])
+    return out
+
+
+def summarize_objectives(o: ObjectiveFactors) -> str:
+    lines = []
+    for name, fo in o.factors.items():
+        lines.append(f"=== {name} =~ {' + '.join(fo.indicators)}: "
+                     f"{OBJECTIVE_STATUS_LABEL[fo.status]} ===")
+        lines.append(f"  {fo.reason}")
+        if fo.fitted is not None:
+            lines.append(summarize(fo.fitted))
+        lines.append("")
+    lines.append("使える因子: " + (", ".join(o.usable) if o.usable else "なし"))
     return "\n".join(lines)

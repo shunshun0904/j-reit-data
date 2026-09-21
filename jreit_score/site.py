@@ -46,17 +46,24 @@ def series_payload(jgb10: pd.DataFrame) -> dict:
 
 
 # 接続状況。実データが入っていない指標を「出ている」ように見せないための表示。
+# state: ok=掲載中, internal=取得済みだが再配布不可のため掲載しない, pending=未接続。
+# 統合スコアは作らない（実データで 3 目的に共通する因子が無かった。CLAUDE.md タスク4）。
+# 目的別の 3 スコアを並べる。
 STATUS = [
     {"item": "10年国債利回り", "state": "ok",
      "note": "財務省 国債金利情報から取得。1974年9月以降"},
-    {"item": "価格・トータルリターン", "state": "pending",
-     "note": "J-Quants に接続予定。V2 のエンドポイントを確認中"},
-    {"item": "分配金（DPU）", "state": "pending",
-     "note": "J-Quants に接続予定。JAPAN-REIT.COM と haitoukabu は履歴を持たないことを確認済み"},
+    {"item": "価格・トータルリターン", "state": "internal",
+     "note": "J-Quants V2 から取得済みでモデル推定に使用。再配布できないため掲載しない"},
+    {"item": "分配金（DPU）", "state": "internal",
+     "note": "J-Quants V2 の決算短信サマリから取得済みでモデル推定に使用。掲載しない"},
     {"item": "財務指標", "state": "pending",
-     "note": "JAPAN-REIT.COM のスナップショットを日次蓄積する方式。未着手"},
-    {"item": "統合スコア", "state": "pending",
-     "note": "上記が揃ってから算出。合成データの値は公開しない"},
+     "note": "現在の説明変数は NAV 倍率と時価総額の2本。LTV 等は JAPAN-REIT.COM の日次蓄積待ち"},
+    {"item": "将来リターン スコア", "state": "pending",
+     "note": "目的別因子のモデル推定値。時系列検証の結果を確認してから掲載"},
+    {"item": "分配金 安定性・成長 スコア", "state": "pending",
+     "note": "目的別因子のモデル推定値。因子が識別できない場合は掲載しない"},
+    {"item": "金利上昇耐性 スコア", "state": "pending",
+     "note": "目的別因子のモデル推定値。時系列検証の結果を確認してから掲載"},
 ]
 
 

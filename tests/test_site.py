@@ -48,10 +48,14 @@ def test_status_marks_unconnected_series_as_pending():
     """実データが無い指標を「出ている」ように見せない."""
     by = {s["item"]: s for s in STATUS}
     assert by["10年国債利回り"]["state"] == "ok"
-    for item in ["価格・トータルリターン", "分配金（DPU）", "財務指標", "統合スコア"]:
+    for item in ["財務指標", "将来リターン スコア", "分配金 安定性・成長 スコア", "金利上昇耐性 スコア"]:
         assert by[item]["state"] == "pending", item
+    # 再配布できない生データは掲載しない
+    for item in ["価格・トータルリターン", "分配金（DPU）"]:
+        assert by[item]["state"] == "internal", item
+    assert not any("統合スコア" in s["item"] for s in STATUS)      # 統合はしない（目的別 3 スコア）
     assert all(s["note"] for s in STATUS)
-    assert all(s["state"] in {"ok", "pending"} for s in STATUS)
+    assert all(s["state"] in {"ok", "internal", "pending"} for s in STATUS)
 
 
 def test_payload_exposes_only_the_connected_series():

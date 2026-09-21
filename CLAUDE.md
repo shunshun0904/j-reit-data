@@ -4,6 +4,8 @@
 J-REIT 58銘柄について、3つの目的（将来リターン・分配金の安定性/成長・金利上昇耐性）の
 共通因子を潜在変数として推定し、財務指標から算出できる「統合スコア」を作る。
 最終的に GitHub Pages で一般公開するダッシュボードにする。
+**変更（2026-09-21）: 実データで 3 目的に共通する因子が確認できなかったため、統合スコアは作らず、
+目的別の 3 スコアを並べる**（「決定済みの設計」の目的別 3 因子を参照）。
 
 ## 決定済みの設計
 - モデル: MIMIC 型 SEM（semopy）。`quality =~ 6指標`, `quality ~ 財務指標`
@@ -22,6 +24,21 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - データ: プロトタイプは JAPAN-REIT.COM（現在値を日次蓄積）+ J-Quants V2（価格/分配金）。
   公開段階で TDnet/EDINET の一次情報へ切替。
 - 統合の重み付けは「潜在因子モデルでデータから推定」を選択済み（効用関数方式・利用者調整方式は不採用）
+  → 実データで共通因子が無く成立しなかった。**統合自体をしない**（等ウェイト合成も不採用, 2026-09-21）
+- **目的別 3 因子（決定 2026-09-21）**: `q_ret =~ ret_6m + ret_12m`, `q_dpu =~ dpu_stab + dpu_growth`,
+  `q_rate =~ rate_resil + dd_resil`。各因子を 2 指標の MIMIC として**別々に**推定する
+  （`model.fit_objective_factors`, 指標の対応は `features.OBJECTIVES`）
+  - 別々に推定する理由: 因子間相関が 0.1 程度なので同時推定しても β̂ はほぼ同じで、
+    識別不能な因子が他を巻き込まない。同時推定は適合度の参考にだけ使う（`fit_objective_model_joint`）
+  - 2 指標の因子は説明変数との共分散を通じてしか自由な負荷量が識別されない
+    （cov(y2,x)/cov(y1,x)=λ2）。因子ごとに判定し、`ok` 以外はスコアを出さない:
+    `sign_split`（2 指標の向きが逆）, `weak`（|λ|<0.15 か p>=0.05 か SE が出ない = 識別不能）,
+    `improper`（標準化負荷量 > 1）, `fit_failed`
+  - 検証は `validation.rolling_validation(objectives=OBJECTIVES)`。因子ごとに担当指標で IC と
+    五分位スプレッドを出し、期ごとの判定を `status_<因子>` に残す
+  - 符号判定 + 2 因子分岐（`fit_with_sign_branch`）は合成データの検証用に残す。
+    実データではこの判定は「割れていない」としか言えず、共通因子の有無は検出できない
+    （`tests/test_model.py::test_one_factor_rule_does_not_catch_a_missing_common_factor`）
 
 ## 状態
 - 動作確認済み: `run_local.py`（合成データで end-to-end）, `tests/test_ingest.py`（パーサのフィクスチャ検証）,
@@ -134,6 +151,8 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
      指標 × 説明変数: nav_ratio は ret_6m −0.32 / ret_12m −0.42 / dpu_stab −0.14、他は |ρ|≤0.08。
      log_mcap は rate_resil +0.20 / dd_resil +0.15 / dpu_stab +0.18、リターンとは 0.07
      （1因子で log_mcap の β≈0 だったのは因子がリターンに寄っていたため。目的別なら効く可能性）
+   - **決定（2026-09-21）: 目的別 3 因子に切替、統合しない**（実装済み。`run_real` の既定が目的別。
+     `--one-factor` で参考として 1 因子 + 符号判定も出す）。実データでの結果は fit-model run #3 待ち
 5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積
    （生データはコミットしない）と、スコア算出後のダッシュボード掲載
 
@@ -151,6 +170,7 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 - `jreit_score/ingest/` 取得（`japan_reit.py` ランキング, `dpu_history.py` DPU, `jgb.py` 国債利回り）
 - `jreit_score/panel.py` 説明変数の整形
 - `jreit_score/synthetic.py` 合成データ
+- `jreit_score/run_real.py` 実データでの推定（目的別 3 因子）と診断（`indicator_structure`）
 - `jreit_score/site.py` 公開ダッシュボード用 JSON の組み立て
 - `site/index.html` 公開ダッシュボード（`site/data.json` は生成物なのでコミットしない）
 
@@ -159,12 +179,15 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
 pip install -r requirements.txt
 python run_local.py            # 合成データで全体を回す（1因子に収まる）
 python run_local.py --opposite # 符号が割れるケース（2因子へ分岐する）
+python run_local.py --objectives # 目的別3因子（合成データでは3因子とも使える）
 PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_model.py
 PYTHONPATH=. python tests/test_jgb.py
 PYTHONPATH=. python tests/test_jquants.py
 PYTHONPATH=. python tests/test_jquants_store.py
 PYTHONPATH=. python tests/test_site.py
+PYTHONPATH=. python tests/test_jquants_panel.py
+PYTHONPATH=. python tests/test_run_real.py
 ```
 
 ## 会話上の約束

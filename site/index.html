@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>J-REIT 統合指標</title>
-<meta name="description" content="J-REIT の統合スコアを潜在因子モデルで推定するプロジェクトの公開ページ。現在は構築中で、接続済みの系列のみを表示しています。">
+<meta name="description" content="J-REIT の将来リターン・分配金・金利上昇耐性を目的別の潜在因子モデルで推定するプロジェクトの公開ページ。現在は構築中で、接続済みの系列のみを表示しています。">
 <style>
   :root {
     color-scheme: light;
@@ -107,15 +107,16 @@
 <div class="wrap">
   <h1>J-REIT 統合指標</h1>
   <p class="lede">
-    J-REIT について、将来リターン・分配金の安定性と成長・金利上昇耐性という3つの目的の共通因子を
-    潜在変数として推定し、財務指標から算出できる統合スコアを作るプロジェクトです。
+    J-REIT について、将来リターン・分配金の安定性と成長・金利上昇耐性という3つの目的ごとに
+    潜在因子を推定し、財務指標から算出できるスコアを目的別に作るプロジェクトです。
+    実データでは3つの目的に共通する因子が確認できなかったため、1本の統合スコアは作りません。
     <strong>現在は構築中で、スコアはまだ算出していません。</strong>
     このページには実データが接続済みの系列だけを表示しています。
   </p>
 
   <section class="card">
     <h2>接続状況</h2>
-    <p class="sub">実データが入っていない指標は「未接続」と表示します。推定値を先出しすることはしません。</p>
+    <p class="sub">実データが入っていない指標は「未接続」、取得済みでも再配布できないデータは「取得済み・非掲載」と表示します。推定値を先出しすることはしません。</p>
     <table>
       <thead><tr><th>指標</th><th>状態</th><th>備考</th></tr></thead>
       <tbody id="status-body"></tbody>
@@ -151,7 +152,7 @@
 
   <footer>
     <p>このページは情報提供のみを目的としており、特定の投資商品の売買を推奨するものではありません。
-       統合スコアを掲載する際は、実測値ではなくモデルによる推定値であることを明記します。</p>
+       スコアを掲載する際は、実測値ではなくモデルによる推定値であることを明記します。</p>
     <p id="generated"></p>
   </footer>
 </div>
@@ -257,7 +258,7 @@ fetch("data.json").then(r => r.json()).then(j => {
   document.getElementById("status-body").innerHTML = j.status.map(s => {
     const ok = s.state === "ok";
     const color = ok ? C("--status-ok") : C("--status-pending");
-    const label = ok ? "接続済み" : "未接続";
+    const label = ok ? "接続済み" : (s.state === "internal" ? "取得済み・非掲載" : "未接続");
     return `<tr><td>${s.item}</td><td><span class="dot" style="background:${color}"></span>${label}</td>` +
            `<td class="note">${s.note}</td></tr>`;
   }).join("");

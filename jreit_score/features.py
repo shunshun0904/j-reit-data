@@ -105,3 +105,11 @@ def build_outcomes(prices, dpu, jgb10, periods) -> pd.DataFrame:
 
 
 OUTCOME_COLS = ["ret_6m", "ret_12m", "dpu_stab", "dpu_growth", "rate_resil", "dd_resil"]
+
+# 目的ごとの指標の対応。実データでは 6 指標に共通因子が無かった（CLAUDE.md タスク4）ため、
+# 目的別に因子を立てる `model.fit_objective_factors` が使う。各因子は 2 指標
+OBJECTIVES = {
+    "q_ret": ["ret_6m", "ret_12m"],          # 将来リターン
+    "q_dpu": ["dpu_stab", "dpu_growth"],     # 分配金の安定性・成長
+    "q_rate": ["rate_resil", "dd_resil"],    # 金利上昇耐性
+}

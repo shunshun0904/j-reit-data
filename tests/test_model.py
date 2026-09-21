@@ -2,10 +2,13 @@
 import numpy as np
 import pandas as pd
 
-from jreit_score.features import OUTCOME_COLS
+from jreit_score.features import OBJECTIVES, OUTCOME_COLS
 from jreit_score.model import (DEFAULT_CAUSES, check_sign_split,
-                               cross_sectional_standardize, fit_mimic,
-                               fit_with_sign_branch, two_factor_spec)
+                               cross_sectional_standardize, factor_residual_correlations,
+                               fit_mimic, fit_objective_factors, fit_objective_model_joint,
+                               fit_with_sign_branch, objective_model_spec,
+                               summarize_objectives, two_factor_spec)
+from jreit_score.validation import report, rolling_validation, status_summary
 
 RETURN_GROUP = ["ret_6m", "ret_12m", "rate_resil", "dd_resil"]
 STABILITY_GROUP = ["dpu_stab", "dpu_growth"]
@@ -110,6 +113,128 @@ def test_predict_scores_preserves_index():
     s = fit_with_sign_branch(panel).predict_scores(test)
     assert list(s.columns) == ["q1", "q2"]
     assert s.index.equals(test.index) and not s.isna().any().any()
+
+
+# ---------------------------------------------------------------------------
+# 目的別 3 因子
+# ---------------------------------------------------------------------------
+
+NO_DPU = [0.7, 0.8, 0.0, 0.0, 0.6, 0.5]                  # 分配金2指標が因子に載らない（純ノイズ）
+RET_SPLIT = [0.7, -0.8, 0.5, 0.4, 0.6, 0.5]              # リターン2指標の向きが逆
+
+# 目的ごとに別の因子が別の説明変数で決まる生成過程（実データと同じく共通因子が無い）
+BETA3 = {
+    "q_ret": {"nav_ratio": -0.5, "log_mcap": 0.1},
+    "q_dpu": {"ltv": -0.4, "occupancy": 0.3},
+    "q_rate": {"fixed_rate_ratio": 0.4, "log_mcap": 0.3},
+}
+LAM3 = {"q_ret": [0.7, 0.8], "q_dpu": [0.5, 0.4], "q_rate": [0.6, 0.5]}
+
+
+def _panel3(seed=0, n_codes=58, n_periods=10):
+    rng = np.random.default_rng(seed)
+    rows = []
+    for p in pd.date_range("2011-06-30", periods=n_periods, freq="6ME"):
+        X = rng.normal(size=(n_codes, len(DEFAULT_CAUSES)))
+        df = pd.DataFrame(X, columns=DEFAULT_CAUSES)
+        for fac, inds in OBJECTIVES.items():
+            b = np.array([BETA3[fac].get(c, 0.0) for c in DEFAULT_CAUSES])
+            eta = X @ b + rng.normal(scale=0.7, size=n_codes)
+            df[inds] = np.outer(eta, LAM3[fac]) + rng.normal(scale=0.8, size=(n_codes, 2))
+        df["code"] = [f"{8950 + i}" for i in range(n_codes)]
+        df["period"] = p
+        rows.append(df)
+    panel = pd.concat(rows, ignore_index=True)
+    return cross_sectional_standardize(panel, OUTCOME_COLS + DEFAULT_CAUSES)
+
+
+def _last_period(panel):
+    return panel[panel["period"] == panel["period"].max()].dropna(subset=DEFAULT_CAUSES)
+
+
+def test_objectives_cover_outcome_cols_exactly_once():
+    flat = [i for inds in OBJECTIVES.values() for i in inds]
+    assert sorted(flat) == sorted(OUTCOME_COLS) and len(flat) == len(set(flat))
+    assert all(len(inds) == 2 for inds in OBJECTIVES.values())
+
+
+def test_objective_factors_all_usable_when_common_factor_exists():
+    panel = _panel(ALIGNED)
+    o = fit_objective_factors(panel)
+    assert o.usable == list(OBJECTIVES), {n: (f.status, f.reason) for n, f in o.factors.items()}
+    test = _last_period(panel)
+    s = o.predict_scores(test)
+    assert list(s.columns) == list(OBJECTIVES) and s.index.equals(test.index)
+    for fac, inds in OBJECTIVES.items():
+        for i in inds:
+            assert s[fac].corr(test[i], method="spearman") > 0, (fac, i)
+
+
+def test_three_separate_factors_pick_their_own_causes():
+    o = fit_objective_factors(_panel3())
+    assert o.usable == list(OBJECTIVES), {n: (f.status, f.reason) for n, f in o.factors.items()}
+    assert o.factors["q_ret"].fitted.beta["nav_ratio"] < -0.2
+    assert o.factors["q_dpu"].fitted.beta["ltv"] < -0.2
+    assert o.factors["q_rate"].fitted.beta["fixed_rate_ratio"] > 0.2
+
+
+def test_one_factor_rule_does_not_catch_a_missing_common_factor():
+    """実データと同じ構造: 符号は割れないが共通因子が無い. 目的別なら3因子とも使える."""
+    panel = _panel3()
+    b = fit_with_sign_branch(panel)
+    assert b.decision == "one_factor", b.reason          # 判定ルールの盲点
+    assert len(fit_objective_factors(panel).usable) == 3
+
+
+def test_noise_objective_is_reported_not_scored():
+    panel = _panel(NO_DPU)
+    o = fit_objective_factors(panel)
+    assert o.factors["q_dpu"].status != "ok", o.factors["q_dpu"].reason
+    assert o.factors["q_ret"].status == "ok" and o.factors["q_rate"].status == "ok"
+    assert "q_dpu" not in o.predict_scores(_last_period(panel)).columns
+    assert set(o.indicator_groups()) == {"q_ret", "q_rate"}
+    assert "q_dpu" in summarize_objectives(o) and "識別不能" in summarize_objectives(o)
+
+
+def test_sign_split_within_objective_is_reported():
+    o = fit_objective_factors(_panel(RET_SPLIT))
+    assert o.factors["q_ret"].status == "sign_split", o.factors["q_ret"].reason
+    assert "q_ret" not in o.usable
+
+
+def test_objective_model_spec_declares_residual_covariances():
+    spec = objective_model_spec(OBJECTIVES, DEFAULT_CAUSES)
+    assert spec.count("=~") == 3 and spec.count("~~") == 3
+    for n in OBJECTIVES:
+        assert f"{n} ~ " in spec
+
+
+def test_joint_fit_residual_correlations_small_without_common_factor():
+    stats, est = fit_objective_model_joint(_panel3())
+    r = factor_residual_correlations(est)
+    assert r.shape == (3, 3) and np.allclose(np.diag(r), 1) and np.allclose(r, r.T)
+    assert (np.abs(r.to_numpy()[~np.eye(3, dtype=bool)]) < 0.3).all(), r
+    s = stats["Value"] if "Value" in stats.columns else stats.iloc[:, 0]
+    assert float(s["CFI"]) > 0.95
+
+
+def test_rolling_validation_by_objectives():
+    ic, scores = rolling_validation(_panel3(n_periods=12), horizon_periods=2, min_train_periods=6,
+                                    objectives=OBJECTIVES)
+    assert len(ic) >= 3 and "error" not in ic
+    for n in OBJECTIVES:
+        assert f"status_{n}" in ic and f"ic_composite_{n}" in ic and f"q5_minus_q1_{n}" in ic
+        assert f"score_{n}" in scores
+        assert (ic[f"status_{n}"] == "ok").all()
+    assert "q_ret" in status_summary(ic) and "ic_composite_q_dpu" in report(ic)
+
+
+def test_rolling_validation_rejects_branch_with_objectives():
+    try:
+        rolling_validation(_panel3(), branch=True, objectives=OBJECTIVES)
+    except ValueError:
+        return
+    raise AssertionError("branch と objectives の同時指定を拒否していない")
 
 
 if __name__ == "__main__":

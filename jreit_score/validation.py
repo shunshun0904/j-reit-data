@@ -11,7 +11,7 @@ import statsmodels.api as sm
 from scipy.stats import spearmanr
 
 from .features import OUTCOME_COLS
-from .model import DEFAULT_CAUSES, fit_mimic, fit_with_sign_branch
+from .model import DEFAULT_CAUSES, fit_mimic, fit_objective_factors, fit_with_sign_branch
 
 
 def _score_eval(test: pd.DataFrame, score: pd.Series, indicators: list[str],
@@ -32,12 +32,19 @@ def _score_eval(test: pd.DataFrame, score: pd.Series, indicators: list[str],
 
 def rolling_validation(panel: pd.DataFrame, horizon_periods: int = 2, min_train_periods: int = 8,
                        indicators=OUTCOME_COLS, causes=DEFAULT_CAUSES,
-                       branch: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
+                       branch: bool = False,
+                       objectives: dict[str, list[str]] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """branch=True で期ごとに符号割れを判定し, 割れた期は2因子スコアを出す.
 
     2因子になった期は因子ごとに列が分かれる（ic_composite_q1 / ic_composite_q2 …）。
     2因子に落ちた時点で1本に束ねる根拠が無いので, 合成スコアは作らない。
+
+    objectives を渡すと目的別因子（`fit_objective_factors`）で期ごとに推定し,
+    使える因子だけを担当指標で評価する（ic_composite_q_ret …）。因子ごとの判定は
+    status_<因子> 列に残す。
     """
+    if objectives is not None and branch:
+        raise ValueError("branch と objectives は同時に指定しない")
     periods = sorted(panel["period"].unique())
     ic_rows, score_rows = [], []
     for i, t in enumerate(periods):
@@ -49,13 +56,26 @@ def rolling_validation(panel: pd.DataFrame, horizon_periods: int = 2, min_train_
         if len(test) < 10:
             continue
         try:
-            fitted = (fit_with_sign_branch(train, indicators, causes) if branch
-                      else fit_mimic(train, indicators, causes))
+            if objectives is not None:
+                fitted = fit_objective_factors(train, objectives, causes)
+            elif branch:
+                fitted = fit_with_sign_branch(train, indicators, causes)
+            else:
+                fitted = fit_mimic(train, indicators, causes)
         except Exception as e:  # 収束失敗などはスキップして記録
             ic_rows.append({"period": t, "error": str(e)[:80]})
             continue
         rec = {"period": t, "n": len(test)}
-        if branch:
+        if objectives is not None:
+            for name, fo in fitted.factors.items():
+                rec[f"status_{name}"] = fo.status
+            scores = fitted.predict_scores(test)
+            for fac, inds in fitted.indicator_groups().items():
+                rec |= _score_eval(test, scores[fac], inds, f"_{fac}")
+            test = test.assign(**{f"score_{f}": scores[f].values for f in scores.columns})
+            score_rows.append(test[["code", "period"] + [f"score_{f}" for f in scores.columns]
+                                   + list(indicators)])
+        elif branch:
             rec["decision"] = fitted.decision
             scores = fitted.predict_scores(test)
             groups = fitted.indicator_groups()
@@ -83,6 +103,15 @@ def newey_west_t(series: pd.Series, lags: int = 2) -> tuple[float, float]:
         return np.nan, np.nan
     res = sm.OLS(s.values, np.ones(len(s))).fit(cov_type="HAC", cov_kwds={"maxlags": lags})
     return float(res.params[0]), float(res.tvalues[0])
+
+
+def status_summary(ic: pd.DataFrame) -> str:
+    """目的別 rolling の因子ごとの判定内訳（status_<因子> 列）."""
+    lines = []
+    for col in [c for c in ic.columns if c.startswith("status_")]:
+        counts = ", ".join(f"{k}={v}" for k, v in ic[col].value_counts().items())
+        lines.append(f"  {col[len('status_'):]:<8} {counts}")
+    return "\n".join(lines)
 
 
 def report(ic: pd.DataFrame) -> str:

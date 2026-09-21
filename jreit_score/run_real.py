@@ -1,8 +1,12 @@
 """実データでの推定: J-Quants の store と財務省の10年債から目的変数と説明変数を作り、
-符号判定つきで MIMIC を推定し、時系列分割で検証する.
+目的別 3 因子の MIMIC を推定し、時系列分割で検証する.
 
 説明変数は J-Quants だけで作れる nav_ratio と log_mcap の2本（設計判断 2026-09-21）。
 ltv / noi_yield / unrealized_gain は JAPAN-REIT.COM のスナップショット蓄積待ち。
+
+1 因子の統合は実データで成立しなかった（6 指標に共通因子が無い。CLAUDE.md タスク4）ので、
+既定では目的別 3 因子（`model.fit_objective_factors`）を推定し統合しない。
+`--one-factor` で参考として 1 因子 + 符号判定も出す。
 
 出力は推定値・適合度・IC・件数のみ（派生値）。生データは出さない。
 """
@@ -14,12 +18,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .features import OUTCOME_COLS, build_outcomes
+from .features import OBJECTIVES, OUTCOME_COLS, build_outcomes
 from .ingest.jgb import fetch_jgb10_full
 from .ingest.jquants_panel import JQ_CAUSES, attach_distributions, causes_panel, half_year_ends
 from .ingest.jquants_store import load
-from .model import cross_sectional_standardize, fit_with_sign_branch, summarize_branch
-from .validation import report, rolling_validation
+from .model import (_fit_line, cross_sectional_standardize, factor_residual_correlations,
+                    fit_objective_factors, fit_objective_model_joint, fit_with_sign_branch,
+                    summarize_branch, summarize_objectives)
+from .validation import report, rolling_validation, status_summary
 
 
 def build_panel(store, jgb10: pd.DataFrame, periods: list[pd.Timestamp]) -> pd.DataFrame:
@@ -54,7 +60,7 @@ def indicator_structure(panel: pd.DataFrame, indicators: list[str] = OUTCOME_COL
     return among, with_causes, eig
 
 
-def main(data: str, start: str, end: str, min_train: int) -> None:
+def main(data: str, start: str, end: str, min_train: int, one_factor: bool = False) -> None:
     store = load(Path(data))
     if store.prices.empty or store.dpu.empty:
         raise SystemExit(f"store が空: {store.summary()}。先に fetch-jquants を実行すること")
@@ -84,18 +90,31 @@ def main(data: str, start: str, end: str, min_train: int) -> None:
     print("指標 × 説明変数:")
     print(with_causes.round(2).to_string())
 
-    print("\n=== in-sample fit (全期間, causes = nav_ratio + log_mcap) ===")
-    b = fit_with_sign_branch(panel, causes=JQ_CAUSES)
-    print(summarize_branch(b))
+    print("\n=== 目的別 3 因子（各 2 指標の MIMIC を別々に推定, causes = nav_ratio + log_mcap） ===")
+    o = fit_objective_factors(panel, OBJECTIVES, JQ_CAUSES)
+    print(summarize_objectives(o))
 
-    print(f"\n=== rolling out-of-sample validation (min_train_periods={min_train}, 符号判定つき) ===")
+    print("\n=== 3 因子の同時推定（適合度の参考。スコアには使わない） ===")
+    try:
+        stats, est = fit_objective_model_joint(panel, OBJECTIVES, JQ_CAUSES)
+        print(_fit_line(stats))
+        print("因子間の残差相関（説明変数で説明した後）:")
+        print(factor_residual_correlations(est, OBJECTIVES).round(2).to_string())
+    except Exception as e:  # 収束失敗は参考値なので止めない
+        print(f"収束せず: {type(e).__name__}")
+
+    print(f"\n=== rolling out-of-sample validation (目的別, min_train_periods={min_train}) ===")
     ic, _ = rolling_validation(panel, horizon_periods=2, min_train_periods=min_train,
-                               causes=JQ_CAUSES, branch=True)
-    if "decision" in ic:
-        print("  判定の内訳: " + ", ".join(f"{k}={v}" for k, v in ic["decision"].value_counts().items()))
+                               causes=JQ_CAUSES, objectives=OBJECTIVES)
+    print("  因子ごとの判定の内訳:")
+    print(status_summary(ic))
     print(report(ic))
     if "error" in ic:
         print("errors:", int(ic["error"].notna().sum()))
+
+    if one_factor:
+        print("\n=== 参考: 1 因子 + 符号判定（統合しない根拠。CLAUDE.md タスク4） ===")
+        print(summarize_branch(fit_with_sign_branch(panel, causes=JQ_CAUSES)))
 
 
 if __name__ == "__main__":
@@ -104,5 +123,6 @@ if __name__ == "__main__":
     ap.add_argument("--start", default="2017-06-30")
     ap.add_argument("--end", default="2026-06-30")
     ap.add_argument("--min-train", type=int, default=6)
+    ap.add_argument("--one-factor", action="store_true", help="参考として 1 因子 + 符号判定も出す")
     a = ap.parse_args()
-    main(a.data, a.start, a.end, a.min_train)
+    main(a.data, a.start, a.end, a.min_train, one_factor=a.one_factor)
