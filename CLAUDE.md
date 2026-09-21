@@ -128,6 +128,11 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     公開する data.json はジョブのログにも残す（公開物と同一。開発セッションは github.io と
     Actions の artifact 保存先に到達できないため、ログから取って描画確認する）
   - `fetch-jquants.yml` J-Quants の差分取得と cache 保存。出力は件数・期間・サイズのみ
+  - `inspect-price-history.yml` 1 銘柄の 20 年月次価格の確認（個人利用。Yahoo Finance の yfinance）。
+    J-Quants の現プランは直近 10 年のみのため。ログには年ごとの要約と分位だけ、図は artifact（7 日）。
+    stooq は JavaScript の確認ページが返り取れない（2026-09-21）。
+    確認済み（8972, 2026-09-21）: 分割 2 回（2022-11-01, 2023-11-01, 各 1→2）は Yahoo の close で調整済み
+    （分割日前後の比率 0.997 / 1.076）。auto_adjust=True は分配金まで調整するので価格水準の比較には使わない
 
 ## 次のタスク（優先順）
 1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
