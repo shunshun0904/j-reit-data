@@ -10,6 +10,10 @@ on:
         description: "取得元（kdx）"
         required: false
         default: "kdx"
+      mode:
+        description: "portfolio（物件一覧の要約）または distribution（分配金の推移）"
+        required: false
+        default: "portfolio"
 
 permissions:
   contents: read
@@ -24,5 +28,15 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      - name: J-Quants の cache を復元（distribution で分割調整後の変化率を出すため。無くてもよい）
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jquants
+          key: jquants-v2-none
+          restore-keys: |
+            jquants-v2-
+
       - name: 構造確認と要約
-        run: PYTHONPATH=. python -m jreit_score.ingest.reit_site --source "${{ inputs.source }}" --policy
+        run: |
+          PYTHONPATH=. python -m jreit_score.ingest.reit_site --source "${{ inputs.source }}" \
+            --mode "${{ inputs.mode }}" --policy --jq-dpu data/jquants
