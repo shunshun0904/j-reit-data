@@ -1,7 +1,7 @@
 """EDINET probe の整形ロジック（ネットワーク不要）."""
 import pandas as pd
 
-from jreit_score.ingest.edinet import annual_reports, find_location_tables, redact, sec_code
+from jreit_score.ingest.edinet import annual_reports, describe_key, find_location_tables, redact, sec_code
 
 
 def test_sec_code_appends_zero():
@@ -36,6 +36,12 @@ def test_find_location_tables_detects_property_table_only():
     assert found[0]["shape"] == (2, 3)
     assert "所在地" in " ".join(found[0]["head"])
     assert found[0]["samples"][0].startswith("テスト")
+
+
+def test_describe_key_never_contains_the_key():
+    d = describe_key(" abc123XYZ\n")
+    assert "abc123" not in d and "長さ 9" in d and "英数字のみ" in d and "空白/改行あり" in d
+    assert describe_key(None) == "未設定"
 
 
 def test_redact_hides_key():

@@ -35,9 +35,19 @@ NAME_KEYS = ("物件名", "物件の名称", "不動産等の名称", "名称")
 def api_key() -> str:
     for k in KEY_ENVS:
         v = os.environ.get(k)
-        if v:
-            return v
+        if v and v.strip():
+            return v.strip()
     raise SystemExit(f"API キーが無い（環境変数 {' / '.join(KEY_ENVS)}）")
+
+
+def describe_key(raw: str | None) -> str:
+    """キーの中身を出さずに、貼り付けミスの手掛かりだけ返す（長さ・文字種・前後の空白）."""
+    if not raw:
+        return "未設定"
+    stripped = raw.strip()
+    kinds = ("英数字のみ" if stripped.isalnum() else "英数字以外を含む")
+    ws = "前後に空白/改行あり" if stripped != raw else "前後の空白なし"
+    return f"長さ {len(stripped)}, {kinds}, {ws}"
 
 
 def redact(text: str, key: str) -> str:
@@ -51,9 +61,17 @@ class Client:
         self.s.headers["User-Agent"] = UA
 
     def _get(self, path: str, **params):
-        params["Subscription-Key"] = self.key
-        r = self.s.get(f"{API}{path}", params=params, timeout=60)
+        """クエリ `Subscription-Key` で送る。認証拒否（本文の StatusCode 401）ならヘッダ
+        `Ocp-Apim-Subscription-Key` でもう一度試す（仕様ではどちらも可とされる）."""
+        r = self.s.get(f"{API}{path}", params={**params, "Subscription-Key": self.key}, timeout=60)
         time.sleep(self.sleep)
+        if r.status_code == 200 and '"StatusCode": 401' in r.text[:60].replace(" ", "") + r.text[:60]:
+            r2 = self.s.get(f"{API}{path}", params=params,
+                            headers={"Ocp-Apim-Subscription-Key": self.key}, timeout=60)
+            time.sleep(self.sleep)
+            if r2.status_code == 200 and "StatusCode" not in r2.text[:40]:
+                print("  [info] クエリでは 401、ヘッダ Ocp-Apim-Subscription-Key では通った")
+                return r2
         if r.status_code != 200:
             raise RuntimeError(f"{path} -> HTTP {r.status_code}: {redact(r.text[:200], self.key)}")
         return r
@@ -187,6 +205,7 @@ if __name__ == "__main__":
     ap.add_argument("--sleep", type=float, default=0.3)
     a = ap.parse_args()
 
+    print("API キー:", describe_key(os.environ.get(KEY_ENVS[0])))
     key = api_key()
     client = Client(key, sleep=a.sleep)
     end = pd.Timestamp(a.end) if a.end else pd.Timestamp.today().normalize()
