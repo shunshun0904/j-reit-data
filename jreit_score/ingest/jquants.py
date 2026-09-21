@@ -36,6 +36,13 @@ discover 3回目で確定（2026-09-21, 空でない件数で再集計）:
     合わせて nav_ratio / log_mcap を J-Quants だけで作れる
   - REITEarnForecastRevision 行は Div* も FDiv* も空（別列にある可能性。使わない）
 
+census（2026-09-21, 58 銘柄）:
+  - 58 銘柄すべてで DPU 履歴が取れた（失敗 0）。期数は最小 2 / 中央値 20 / 最大 20
+  - 決算期間の中央値: 181日 5, 182日 47, 183日 4, 242日 1, 364日 1
+  - 年次決算として除外されるのは 8985 のみ → 57 銘柄が対象
+  - 401A は上場が新しく 2 期のみ（dpu_stability が読み飛ばす）
+  - 期末が開示日より後の行（2027-01-31）が混入していたため、period_end > DiscDate を落とす
+
 総リターンの分配金計上日: 権利落ち日は /fins/dividend でしか取れないため、
 CurPerEn（期末日=基準日）で代用する。実際の権利落ち日は期末の2営業日前で、
 6か月・12か月リターンに対する誤差は数日分。
@@ -328,6 +335,11 @@ def to_dpu_from_summary(records: list[dict],
         raise KeyError(f"想定した列が無い: {sorted(missing)}。実際の列: {sorted(df.columns)}")
     df = df[df["DocType"].astype(str).isin(doctypes)].copy()
     if "DiscDate" in df.columns:
+        # 実績の決算短信は期末より前に開示できない。期末が開示日より後の行は実績ではない
+        # （census で 2027-01-31 の期末が混入していた）。今日の日付には依存させない
+        disc = pd.to_datetime(df["DiscDate"], errors="coerce")
+        pend = pd.to_datetime(df["CurPerEn"], errors="coerce")
+        df = df[~(pend > disc)].copy()
         df = df.sort_values("DiscDate")
     out = pd.DataFrame({
         "code": _code4(df["Code"]),
@@ -408,11 +420,9 @@ def fetch_dpu(client: Client, code: str) -> pd.DataFrame:
     return to_dpu_from_summary(client.get_all(ENDPOINTS["summary"], {"code": code}))
 
 
-def census(client: Client, sleep: float = SLEEP) -> dict:
-    """全 J-REIT のサマリを引き、決算期間の分布と年次決算で除外される銘柄を数える.
-
-    出すのは件数・期間・銘柄コードだけ。分配金額は出さない。
-    """
+def fetch_all_dpu(client: Client, sleep: float = SLEEP,
+                  exclude_annual_issuers: bool = True) -> tuple[pd.DataFrame, list[str], list[tuple[str, str]]]:
+    """全 J-REIT の DPU 履歴を集める. 返り値は (dpu, 除外した年次決算の銘柄, 取得失敗)."""
     uni = reit_universe(client)
     frames, failed = [], []
     for code in uni["code"]:
@@ -421,13 +431,26 @@ def census(client: Client, sleep: float = SLEEP) -> dict:
         except Exception as e:
             failed.append((code, redact(str(e))[:80]))
         time.sleep(sleep)
-    dpu = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-    span = period_span_days(dpu)
-    kept, annual = exclude_annual(dpu)
-    per_code = dpu.groupby("code").size() if len(dpu) else pd.Series(dtype=int)
+    dpu = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
+        columns=["code", "period_start", "period_end", "dpu", "ex_date"])
+    excluded: list[str] = []
+    if exclude_annual_issuers and len(dpu):
+        dpu, excluded = exclude_annual(dpu)
+    return dpu, excluded, failed
+
+
+def census(client: Client, sleep: float = SLEEP) -> dict:
+    """全 J-REIT のサマリを引き、決算期間の分布と年次決算で除外される銘柄を数える.
+
+    出すのは件数・期間・銘柄コードだけ。分配金額は出さない。
+    """
+    dpu_all, _, failed = fetch_all_dpu(client, sleep, exclude_annual_issuers=False)
+    span = period_span_days(dpu_all)
+    kept, annual = exclude_annual(dpu_all)
+    per_code = kept.groupby("code").size() if len(kept) else pd.Series(dtype=int)
     return {
-        "universe": int(len(uni)),
-        "with_dpu": int(dpu["code"].nunique()) if len(dpu) else 0,
+        "universe": int(dpu_all["code"].nunique()) + len(failed),
+        "with_dpu": int(dpu_all["code"].nunique()),
         "failed": failed,
         "span_days_distribution": span.round().value_counts().sort_index().to_dict(),
         "annual_excluded": annual,
@@ -435,10 +458,10 @@ def census(client: Client, sleep: float = SLEEP) -> dict:
         "periods_per_code_min_median_max": (int(per_code.min()), float(per_code.median()), int(per_code.max()))
                                             if len(per_code) else None,
         "kept_codes_with_lt6_periods": sorted(per_code[per_code < 6].index.astype(str)) if len(per_code) else [],
-        "period_end_range": (str(dpu["period_end"].min().date()), str(dpu["period_end"].max().date()))
-                            if len(dpu) else None,
+        "period_end_range": (str(kept["period_end"].min().date()), str(kept["period_end"].max().date()))
+                            if len(kept) else None,
+        "future_period_rows": int((kept["period_end"] > pd.Timestamp.today()).sum()) if len(kept) else 0,
     }
-
 
 if __name__ == "__main__":
     import argparse

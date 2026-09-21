@@ -159,6 +159,18 @@ def test_period_start_is_kept_for_annualisation():
     assert span_days.between(180, 184).all()          # 6か月の期間
 
 
+def test_future_period_end_is_not_an_actual():
+    """実績の決算短信は期末より前に開示できない。期末 > 開示日の行は落とす（リーク防止）."""
+    rows = SUMMARY + [
+        {"DiscDate": "2026-08-15", "Code": "89850", "DocType": "FYFinancialStatements_Consolidated_REIT",
+         "CurPerType": "FY", "CurPerEn": "2027-01-31", "DivUnit": "9999", "FDivUnit": ""},
+    ]
+    d = to_dpu_from_summary(rows)
+    assert pd.Timestamp("2027-01-31") not in set(d["period_end"])
+    assert d["period_end"].max() == pd.Timestamp("2024-12-31")
+    assert 9999.0 not in d["dpu"].tolist()
+
+
 def test_period_start_absent_gives_nat_not_error():
     """CurPerSt が無い応答でも落ちず、period_start は NaT になる."""
     d = to_dpu_from_summary(SUMMARY)
