@@ -59,9 +59,21 @@ class Client:
         return r
 
     def documents(self, date: str) -> tuple[dict, list[dict]]:
-        """書類一覧（type=2 はメタデータ + 一覧）. 返り値 (metadata, results)."""
-        j = self._get("/documents.json", date=date, type=2).json()
-        return j.get("metadata", {}), j.get("results", []) or []
+        """書類一覧（type=2 はメタデータ + 一覧）. 返り値 (metadata, results).
+
+        想定と違う形の応答（`results` が無い）は、先頭のキーと本文の抜粋（キーは伏せ字）を付けて失敗にする。
+        """
+        r = self._get("/documents.json", date=date, type=2)
+        try:
+            j = r.json()
+        except ValueError:
+            raise RuntimeError(f"documents.json: JSON でない応答 ({r.headers.get('content-type')}): "
+                               f"{redact(r.text[:300], self.key)!r}")
+        if not isinstance(j, dict) or "results" not in j:
+            top = sorted(j.keys()) if isinstance(j, dict) else type(j).__name__
+            raise RuntimeError(f"documents.json: 想定外の形。top-level={top}; "
+                               f"本文抜粋={redact(r.text[:300], self.key)!r}")
+        return j.get("metadata", {}) or {}, j.get("results", []) or []
 
     def download(self, doc_id: str, kind: int = 1) -> bytes:
         return self._get(f"/documents/{doc_id}", type=kind).content
@@ -180,10 +192,12 @@ if __name__ == "__main__":
     end = pd.Timestamp(a.end) if a.end else pd.Timestamp.today().normalize()
     start = end - pd.Timedelta(days=a.days)
 
-    # 1 日分だけ先に取って応答の形（キー名）を確認する
-    meta, res = client.documents(end.strftime("%Y-%m-%d"))
-    print("metadata keys:", sorted(meta.keys()) if isinstance(meta, dict) else type(meta).__name__)
-    print("results:", len(res), "件; keys:", sorted(res[0].keys()) if res else "（当日は書類なし）")
+    # 直近の平日 1 日分を先に取って応答の形（キー名）を確認する。形が違えばここで止める
+    probe_day = end - pd.offsets.BDay(1)
+    meta, res = client.documents(probe_day.strftime("%Y-%m-%d"))
+    print(f"probe {probe_day.date()}: metadata keys:", sorted(meta.keys()))
+    print("  metadata:", {k: (str(v)[:60]) for k, v in meta.items() if k != "parameter"})
+    print("  results:", len(res), "件; keys:", sorted(res[0].keys()) if res else "（当日は書類なし）")
 
     codes = load_codes(a.universe, a.codes)
     print(f"対象銘柄 {len(codes)} 件")
