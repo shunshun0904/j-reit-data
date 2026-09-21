@@ -4,9 +4,9 @@
 """
 import pandas as pd
 
-from jreit_score.ingest.jquants import (ENDPOINTS, ENUM_COLS, API_BASE, Shape, redact,
-                                        select_reits, shape_of, to_dpu, to_dpu_from_summary,
-                                        to_prices)
+from jreit_score.ingest.jquants import (ENDPOINTS, ENUM_COLS, API_BASE, Shape, exclude_annual,
+                                        period_span_days, redact, select_reits, shape_of,
+                                        to_dpu, to_dpu_from_summary, to_prices)
 
 # EQ_BARS_DAILY_COLUMNS_V2 の略記列名に合わせたフィクスチャ
 BARS = [
@@ -163,6 +163,41 @@ def test_period_start_absent_gives_nat_not_error():
     """CurPerSt が無い応答でも落ちず、period_start は NaT になる."""
     d = to_dpu_from_summary(SUMMARY)
     assert "period_start" in d.columns and d["period_start"].isna().all()
+
+
+def _dpu(code, ends, months):
+    ends = pd.to_datetime(ends)
+    return pd.DataFrame({"code": code, "period_end": ends,
+                         "period_start": ends - pd.DateOffset(months=months) + pd.Timedelta(days=1),
+                         "dpu": 1000.0, "ex_date": ends})
+
+
+def test_period_span_and_annual_exclusion():
+    """半期決算（≈182日）は残し、年次決算（≈365日）は除く."""
+    semi = _dpu("8951", ["2023-06-30", "2023-12-31", "2024-06-30", "2024-12-31"], 6)
+    annual = _dpu("8985", ["2022-12-31", "2023-12-31", "2024-12-31"], 12)
+    dpu = pd.concat([semi, annual], ignore_index=True)
+    span = period_span_days(dpu)
+    assert 180 <= span["8951"] <= 184 and 364 <= span["8985"] <= 366
+    kept, excluded = exclude_annual(dpu)
+    assert excluded == ["8985"] and set(kept["code"]) == {"8951"}
+
+
+def test_period_span_falls_back_to_period_end_diff_when_start_missing():
+    """period_start が NaT でも、連続する期末の差から期間を推定して判定できる."""
+    dpu = _dpu("8951", ["2023-06-30", "2023-12-31", "2024-06-30"], 6)
+    dpu["period_start"] = pd.NaT
+    span = period_span_days(dpu)
+    assert 180 <= span["8951"] <= 184
+    kept, excluded = exclude_annual(dpu)
+    assert excluded == [] and len(kept) == 3
+
+
+def test_single_period_code_is_not_excluded():
+    """1期しか無く期間を判定できない銘柄は除かない（黙って落とさない）."""
+    dpu = _dpu("3462", ["2024-12-31"], 6); dpu["period_start"] = pd.NaT
+    kept, excluded = exclude_annual(dpu)
+    assert excluded == [] and len(kept) == 1
 
 
 def test_enum_cols_never_include_amounts():

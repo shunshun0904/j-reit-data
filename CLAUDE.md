@@ -51,7 +51,9 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     `CurPerEn` が期末日、`DivUnit` が1口当たり分配金の実績 → `to_dpu_from_summary`
   - 権利落ち日は取れないので総リターンの分配金計上は期末日で代用（誤差数日）
   - 決算期間の長さが銘柄で違う（大多数は6か月、8985 は12か月で年1回分配）。
-    `to_dpu_from_summary` は `period_start` も返す。`dpu_growth` の年率化と窓の定義は未決
+    **決定（2026-09-21）: 年次決算の銘柄は母集団から除外**し、モデルは「1期あたり・6期の窓」
+    のまま。判定は `to_dpu_from_summary` の期首→期末の中央値が 270 日超（`exclude_annual`）。
+    何銘柄が外れるかは `--census` で数える（除外コードだけをログに出す）
   - FY 行の `BPS`・`ShOutFY` と bars の `MktCap` で `nav_ratio` / `log_mcap` を J-Quants だけで作れる
   - 注意: `DivUnit`/`FDivUnit` は金額なので値集合をログに出さない（一度出してログを削除した）
 - 注意: `Authorization: <生のキー>` は使わない。API Gateway が SigV4 として解釈し、

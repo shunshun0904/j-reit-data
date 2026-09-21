@@ -365,6 +365,33 @@ def select_reits(master: pd.DataFrame, exclude_infra: bool = True) -> pd.DataFra
               .drop_duplicates("code").sort_values("code").reset_index(drop=True))
 
 
+# 決算期間がこの日数を超える銘柄は年次決算（年1回分配）とみなして母集団から除く。
+# 大多数の J-REIT は6か月（≈182日）、8985 のような12か月決算（≈365日）は年1点しか
+# DPU が無く、「1期あたり」の成長率と6期の窓が半期銘柄と揃わないため（設計判断 2026-09-21）
+ANNUAL_SPAN_DAYS = 270
+
+
+def period_span_days(dpu: pd.DataFrame) -> pd.Series:
+    """銘柄ごとの決算期間の中央値（日）. period_start が無ければ連続する期末の差で代用."""
+    if dpu.empty:
+        return pd.Series(dtype="float64", name="span_days")
+    d = dpu.sort_values(["code", "period_end"]).copy()
+    span = (d["period_end"] - d["period_start"]).dt.days if "period_start" in d.columns else None
+    fallback = d.groupby("code")["period_end"].diff().dt.days
+    d["span"] = span.where(span.notna(), fallback) if span is not None else fallback
+    return d.groupby("code")["span"].median().rename("span_days")
+
+
+def exclude_annual(dpu: pd.DataFrame, max_days: int = ANNUAL_SPAN_DAYS) -> tuple[pd.DataFrame, list[str]]:
+    """年次決算の銘柄を除いた DPU と、除いた銘柄コードを返す.
+
+    期間が判定できない銘柄（1期しか無い等）は除かない。
+    """
+    span = period_span_days(dpu)
+    annual = sorted(span[span > max_days].index.astype(str))
+    return dpu[~dpu["code"].astype(str).isin(annual)].reset_index(drop=True), annual
+
+
 def reit_universe(client: Client, exclude_infra: bool = True) -> pd.DataFrame:
     """上場 J-REIT の一覧. 列 code(4桁), code5, name."""
     return select_reits(pd.DataFrame.from_records(client.get_all(ENDPOINTS["master"])), exclude_infra)
@@ -381,13 +408,53 @@ def fetch_dpu(client: Client, code: str) -> pd.DataFrame:
     return to_dpu_from_summary(client.get_all(ENDPOINTS["summary"], {"code": code}))
 
 
+def census(client: Client, sleep: float = SLEEP) -> dict:
+    """全 J-REIT のサマリを引き、決算期間の分布と年次決算で除外される銘柄を数える.
+
+    出すのは件数・期間・銘柄コードだけ。分配金額は出さない。
+    """
+    uni = reit_universe(client)
+    frames, failed = [], []
+    for code in uni["code"]:
+        try:
+            frames.append(fetch_dpu(client, code))
+        except Exception as e:
+            failed.append((code, redact(str(e))[:80]))
+        time.sleep(sleep)
+    dpu = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    span = period_span_days(dpu)
+    kept, annual = exclude_annual(dpu)
+    per_code = dpu.groupby("code").size() if len(dpu) else pd.Series(dtype=int)
+    return {
+        "universe": int(len(uni)),
+        "with_dpu": int(dpu["code"].nunique()) if len(dpu) else 0,
+        "failed": failed,
+        "span_days_distribution": span.round().value_counts().sort_index().to_dict(),
+        "annual_excluded": annual,
+        "kept": int(kept["code"].nunique()) if len(kept) else 0,
+        "periods_per_code_min_median_max": (int(per_code.min()), float(per_code.median()), int(per_code.max()))
+                                            if len(per_code) else None,
+        "kept_codes_with_lt6_periods": sorted(per_code[per_code < 6].index.astype(str)) if len(per_code) else [],
+        "period_end_range": (str(dpu["period_end"].min().date()), str(dpu["period_end"].max().date()))
+                            if len(dpu) else None,
+    }
+
+
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--discover", action="store_true",
                     help="3エンドポイントの応答の形（列・件数・列挙値）を調べる。レコードは出さない")
+    ap.add_argument("--census", action="store_true",
+                    help="全 J-REIT の決算期間の分布と、年次決算で除外される銘柄を数える")
     ap.add_argument("--codes", nargs="*", default=["8985", "8951"])
     a = ap.parse_args()
+    if a.census:
+        _, env = api_key()
+        print(f"base={API_BASE}  key={env}（値は出さない）")
+        for k, v in census(Client()).items():
+            print(f"  {k}: {v}")
+        raise SystemExit(0)
     if a.discover:
         _, env = api_key()
         print(f"base={API_BASE}  key={env}（値は出さない）")
