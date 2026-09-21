@@ -48,10 +48,10 @@ ENDPOINTS = {
 }
 REIT_PRODCAT = "013"   # discover で 8985/8951 がこの値だった。件数 ≈58 を確認して固定する
 # summary の中で非null件数を数える列（分配金・期間・開示日に関わるもの）
-_SUMMARY_COUNT = re.compile(r"^(Div|FDiv|NxFDiv|.*Date|.*FY.*|CurPer|CurFY|Disc|TypeOfDoc|TypeOfCur|NetSales|Profit|EPS)", re.I)
+_SUMMARY_COUNT = re.compile(r"^(Div|FDiv|NxFDiv|.*Date|.*FY.*|CurPer|Disc|DocType|Sales|NP|EPS|BPS)$|^(Div|FDiv|NxFDiv|CurPer|CurFY|NxtFY)", re.I)
 # 値の集合をログに出してよい小さな列挙列（レコードそのものは出さない）
 ENUM_COLS = ("ProdCat", "Mkt", "MktNm", "S17", "S33", "FRCode", "IFCode", "StatCode",
-             "CommSpecCode", "IFTerm", "TypeOfDoc", "TypeOfCurPer", "DivUnit", "FDivUnit")
+             "CommSpecCode", "IFTerm", "DocType", "CurPerType", "DivUnit", "FDivUnit")
 _B64 = re.compile(r"[A-Za-z0-9+/]{24,}={0,2}")
 
 
