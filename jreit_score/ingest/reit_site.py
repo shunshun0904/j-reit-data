@@ -139,45 +139,6 @@ def summarize(tables: list[pd.DataFrame]) -> None:
     print(df.nlargest(10, "price")[["name", "type", "price", "appraisal"]].to_string(index=False))
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=list(SOURCES), default="kdx")
-    ap.add_argument("--mode", choices=["portfolio", "distribution"], default="portfolio")
-    ap.add_argument("--policy", action="store_true", help="利用規約らしきページも取得して転載条件の文を出す")
-    ap.add_argument("--jq-dpu", default="", help="J-Quants cache のディレクトリ（分割調整後の DPU 変化率を出す）")
-    ap.add_argument("--code", default="8972")
-    ap.add_argument("--splits", default="2022-11-01:2,2023-11-01:2", help="分割の効力日:比率 をカンマ区切り")
-    ap.add_argument("--sleep", type=float, default=2.0)
-    a = ap.parse_args()
-    s = requests.Session()
-    if a.mode == "portfolio":
-        url = SOURCES[a.source]
-        page = fetch(url, s)
-        tables = inspect_tables(page)
-        summarize(tables)
-        links = policy_links(page, url)
-        print("\n利用規約らしきリンク:", links if links else "見つからず")
-        if a.policy and links:
-            time.sleep(a.sleep)
-            pol = fetch(links[0][1], s)
-            for sent in policy_sentences(pol):
-                print("  -", sent)
-    else:
-        top = fetch(TOP_PAGES[a.source], s)
-        links = find_links(top, TOP_PAGES[a.source])
-        print("「分配金」を含むリンク:", links if links else "見つからず")
-        if links:
-            time.sleep(a.sleep)
-            page = fetch(links[0][1], s)
-            tables = inspect_tables(page)
-            splits = [(pd.Timestamp(x.split(":")[0]), float(x.split(":")[1])) for x in a.splits.split(",") if x]
-            summarize_distribution(parse_distribution(tables), splits)
-        if a.jq_dpu:
-            splits = [(pd.Timestamp(x.split(":")[0]), float(x.split(":")[1])) for x in a.splits.split(",") if x]
-            print()
-            jq_dpu_growth(a.jq_dpu, a.code, splits)
-
-
 # ---------------------------------------------------------------------------
 # 分配金の推移（公式 IR ページ）と、J-Quants の DPU 履歴からの分割調整後の変化率
 # ---------------------------------------------------------------------------
@@ -291,3 +252,42 @@ def jq_dpu_growth(root: str, code: str, splits: list[tuple[pd.Timestamp, float]]
     yrs = (len(a) - 1) / 2
     print(f"  調整後 DPU の先頭→直近: {a[-1] / a[0] - 1:+.1%}（{yrs:.1f} 年, 年率 {(a[-1] / a[0]) ** (1 / yrs) - 1:+.1%}）, "
           f"前期比で増配 {int((d['pop'] > 0).sum())} 回 / 減配 {int((d['pop'] < 0).sum())} 回")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--source", choices=list(SOURCES), default="kdx")
+    ap.add_argument("--mode", choices=["portfolio", "distribution"], default="portfolio")
+    ap.add_argument("--policy", action="store_true", help="利用規約らしきページも取得して転載条件の文を出す")
+    ap.add_argument("--jq-dpu", default="", help="J-Quants cache のディレクトリ（分割調整後の DPU 変化率を出す）")
+    ap.add_argument("--code", default="8972")
+    ap.add_argument("--splits", default="2022-11-01:2,2023-11-01:2", help="分割の効力日:比率 をカンマ区切り")
+    ap.add_argument("--sleep", type=float, default=2.0)
+    a = ap.parse_args()
+    s = requests.Session()
+    if a.mode == "portfolio":
+        url = SOURCES[a.source]
+        page = fetch(url, s)
+        tables = inspect_tables(page)
+        summarize(tables)
+        links = policy_links(page, url)
+        print("\n利用規約らしきリンク:", links if links else "見つからず")
+        if a.policy and links:
+            time.sleep(a.sleep)
+            pol = fetch(links[0][1], s)
+            for sent in policy_sentences(pol):
+                print("  -", sent)
+    else:
+        top = fetch(TOP_PAGES[a.source], s)
+        links = find_links(top, TOP_PAGES[a.source])
+        print("「分配金」を含むリンク:", links if links else "見つからず")
+        if links:
+            time.sleep(a.sleep)
+            page = fetch(links[0][1], s)
+            tables = inspect_tables(page)
+            splits = [(pd.Timestamp(x.split(":")[0]), float(x.split(":")[1])) for x in a.splits.split(",") if x]
+            summarize_distribution(parse_distribution(tables), splits)
+        if a.jq_dpu:
+            splits = [(pd.Timestamp(x.split(":")[0]), float(x.split(":")[1])) for x in a.splits.split(",") if x]
+            print()
+            jq_dpu_growth(a.jq_dpu, a.code, splits)
