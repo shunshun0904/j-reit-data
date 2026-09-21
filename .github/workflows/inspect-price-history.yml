@@ -1,5 +1,5 @@
 # 1 銘柄の 20 年程度の月次価格を確認する（個人利用）。J-Quants の現プランは直近 10 年しか
-# 取れないため、stooq と Yahoo Finance から取って要約統計と図だけを出す。生データは出さない。
+# 取れないため、Yahoo Finance（yfinance）から取って要約統計と図だけを出す。生データは出さない。
 name: inspect-price-history
 
 on:
@@ -13,8 +13,8 @@ on:
         description: "遡る年数"
         required: false
         default: "20"
-      split_date:
-        description: "分割の効力発生日（YYYY-MM-DD, 調整の有無の確認用。空なら確認しない）"
+      split_dates:
+        description: "分割の効力発生日（YYYY-MM-DD をカンマ区切り。調整の有無の確認用。空なら確認しない）"
         required: false
         default: ""
 
@@ -29,14 +29,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests pandas numpy matplotlib yfinance
+      - run: pip install pandas numpy matplotlib yfinance
 
       - name: 取得と要約
         run: |
           set -euo pipefail
-          ARGS="${{ inputs.code }} --years ${{ inputs.years }} --out out"
-          if [ -n "${{ inputs.split_date }}" ]; then ARGS="$ARGS --split-date ${{ inputs.split_date }}"; fi
-          PYTHONPATH=. python -m jreit_score.ingest.price_history $ARGS
+          PYTHONPATH=. python -m jreit_score.ingest.price_history "${{ inputs.code }}" --years "${{ inputs.years }}" \
+            --out out --split-dates "${{ inputs.split_dates }}"
 
       - uses: actions/upload-artifact@v4
         with:
