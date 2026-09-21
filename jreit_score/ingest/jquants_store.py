@@ -109,7 +109,7 @@ def update(client: Client, store: Store, to_yyyymmdd: str | None = None,
         try:
             dpu_frames.append(fetch_dpu(client, code))
         except Exception as e:
-            failed.append((code, "dpu: " + redact(str(e))[:80]))
+            failed.append((code, "dpu: " + redact(str(e))[:240]))
         time.sleep(sleep)
     dpu = pd.concat(dpu_frames, ignore_index=True) if dpu_frames else store.dpu.iloc[0:0]
     dpu, annual = exclude_annual(dpu)
@@ -124,7 +124,7 @@ def update(client: Client, store: Store, to_yyyymmdd: str | None = None,
         try:
             new_frames.append(fetch_prices(client, code, frm, to))
         except Exception as e:
-            failed.append((code, "prices: " + redact(str(e))[:80]))
+            failed.append((code, "prices: " + redact(str(e))[:240]))
         time.sleep(sleep)
     if new_frames:
         prices = merge_prices(prices, pd.concat(new_frames, ignore_index=True))
@@ -144,7 +144,9 @@ if __name__ == "__main__":
     after, failed = update(Client(), before, a.to, codes=a.codes)
     save(after, root)
     print("保存:", after.summary())
-    print(f"失敗 {len(failed)} 件:", failed[:10])
+    print(f"失敗 {len(failed)} 件:")
+    for code, why in failed[:10]:
+        print(f"  {code}: {why}")
     for p in sorted(root.glob("*.parquet")):
         print(f"  {p.name}: {p.stat().st_size:,} bytes")
     if failed and len(failed) >= max(3, len(after.universe) // 4):
