@@ -49,7 +49,8 @@ def series_payload(jgb10: pd.DataFrame) -> dict:
 
 # 接続状況。実データが入っていない指標を「出ている」ように見せないための表示。
 # state: ok=掲載中, internal=取得済みだが再配布不可のため掲載しない, pending=未接続,
-#        unidentified=モデルが識別できず掲載しない。
+#        unidentified=モデルが推定できず掲載しない, unvalidated=推定はできたが時系列検証で
+#        予測力が確認できず掲載しない（`publish.PUBLISH_MIN_T`）。
 # 統合スコアは作らない（実データで目的をまたぐ共通因子が無かった。CLAUDE.md タスク4）。
 # 目的別のスコアを並べる。
 BASE_STATUS = [
@@ -73,12 +74,13 @@ def status_rows(scores: dict | None) -> list[dict]:
             rows.append({"item": item, "state": "pending", "note": "モデル未接続"})
             continue
         o = scores["objectives"][key]
-        if o["usable"]:
-            oos = o.get("oos") or {}
-            ver = (f"時系列検証の IC {oos['ic']}（NW-t {oos['ic_t']}, {oos['n_periods']} 期）"
-                   if oos.get("ic") is not None else "時系列検証は未実施")
+        oos = o.get("oos") or {}
+        if o["published"]:
             rows.append({"item": item, "state": "ok",
-                         "note": f"モデル推定値。基準日 {scores['as_of']}。{ver}"})
+                         "note": f"モデル推定値。基準日 {scores['as_of']}。"
+                                 f"時系列検証の IC {oos['ic']}（NW-t {oos['ic_t']}, {oos['n_periods']} 期）"})
+        elif o["usable"]:
+            rows.append({"item": item, "state": "unvalidated", "note": o["publish_reason"]})
         else:
             rows.append({"item": item, "state": "unidentified",
                          "note": f"{o['status_label']}。掲載しない"})

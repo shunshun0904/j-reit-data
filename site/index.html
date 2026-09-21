@@ -126,7 +126,7 @@
     J-REIT について、将来リターン・分配金の安定性と成長・金利上昇耐性という3つの目的ごとに
     潜在因子を推定し、財務指標から算出できるスコアを目的別に作るプロジェクトです。
     実データでは3つの目的に共通する因子が確認できなかったため、1本の統合スコアは作りません。
-    掲載するスコアはすべてモデルによる推定値で、推定できない目的（識別不能や説明変数に信号が無い場合）は掲載しません。
+    掲載するスコアはすべてモデルによる推定値で、推定できない目的や、時系列検証で予測力が確認できない目的は掲載しません。
     このページには実データが接続済みの系列だけを表示しています。
   </p>
 
@@ -307,7 +307,8 @@ function renderScores(sc) {
     const ver = oos.ic == null ? "時系列検証: 使える期なし"
       : `時系列検証 IC ${fz(oos.ic)}（NW-t ${oos.ic_t}、${oos.n_periods} 期）、五分位スプレッド ${fz(oos.spread)}`;
     const beta = o.beta ? Object.entries(o.beta).map(([c, v]) => `${c} ${fz(v)}`).join(", ") : "";
-    const state = o.usable ? `<span class="state">掲載</span>` : `<span class="state">非掲載</span>: ${esc(o.status_label)}`;
+    const state = o.published ? `<span class="state">掲載</span>`
+      : `<span class="state">${esc(o.publish_reason || "非掲載")}</span>` + (o.usable ? "" : `: ${esc(o.status_label)}`);
     return `<div class="obj"><b>${esc(o.label)}</b>${state}<br>指標: ${o.indicators.join(", ")}` +
            (o.usable ? `<br>係数: ${beta}<br>${ver}` : "") + `</div>`;
   }).join("");
@@ -327,7 +328,8 @@ function renderScores(sc) {
   document.getElementById("scores-note").textContent =
     "z スコアは目的ごとに掲載銘柄間で標準化した値（平均 0、標準偏差 1）。五分位は 5 が上位。" +
     "いずれも財務指標から線形に算出したモデル推定値で、実測値ではなく、将来の成果を示すものでもありません。" +
-    "識別できない目的は掲載しません。特定の銘柄の売買を推奨するものではありません。";
+    "掲載するのは、推定でき、かつ時系列検証で予測力が確認できた目的（IC の Newey–West t 値が 2 以上）だけです。" +
+    "特定の銘柄の売買を推奨するものではありません。";
 }
 
 function drawScoreTable(sc) {
@@ -352,7 +354,8 @@ fetch("data.json").then(r => r.json()).then(j => {
     const ok = s.state === "ok";
     const color = ok ? C("--status-ok") : C("--status-pending");
     const label = ok ? "掲載中" : (s.state === "internal" ? "取得済み・非掲載"
-                : s.state === "unidentified" ? "非掲載（推定できず）" : "未接続");
+                : s.state === "unidentified" ? "非掲載（推定できず）"
+                : s.state === "unvalidated" ? "非掲載（検証で予測力なし）" : "未接続");
     return `<tr><td>${s.item}</td><td><span class="dot" style="background:${color}"></span>${label}</td>` +
            `<td class="note">${s.note}</td></tr>`;
   }).join("");

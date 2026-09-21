@@ -60,25 +60,29 @@ def test_status_marks_unconnected_series_as_pending():
 
 
 def _fake_scores():
-    obj = lambda status, usable: {"label": "x", "indicators": [], "status": status,
-                                  "status_label": status, "reason": "", "usable": usable,
-                                  "oos": {"ic": 0.3, "ic_t": 4.0, "n_periods": 10}}
+    def obj(status, usable, published, t=4.0):
+        return {"label": "x", "indicators": [], "status": status, "status_label": status, "reason": "",
+                "usable": usable, "published": published,
+                "publish_reason": "掲載" if published else ("非掲載（時系列検証で予測力が確認できず）" if usable else "非掲載（推定できず）"),
+                "oos": {"ic": 0.3, "ic_t": t, "n_periods": 10}}
     return {"as_of": "2026-09-18", "fit": {}, "causes": ["nav_ratio", "log_mcap"],
-            "objectives": {"q_ret": obj("ok", True), "q_stab": obj("no_signal", False),
-                           "q_grow": obj("ok", True), "q_rate": obj("weak", False)},
-            "columns": ["q_ret", "q_grow"],
-            "rows": [{"code": "8951", "name": "A", "q_ret": {"z": 0.5, "q": 4}, "q_grow": {"z": -0.1, "q": 2}}]}
+            "objectives": {"q_ret": obj("ok", True, True), "q_stab": obj("ok", True, False, t=1.4),
+                           "q_grow": obj("no_signal", False, False), "q_rate": obj("ok", True, True)},
+            "columns": ["q_ret", "q_rate"],
+            "rows": [{"code": "8951", "name": "A", "q_ret": {"z": 0.5, "q": 4}, "q_rate": {"z": -0.1, "q": 2}}]}
 
 
 def test_status_reflects_objective_decisions_when_scores_exist():
     by = {s["item"]: s for s in status_rows(_fake_scores())}
     assert by["将来リターン スコア"]["state"] == "ok" and "2026-09-18" in by["将来リターン スコア"]["note"]
-    assert by["分配金の安定性 スコア"]["state"] == "unidentified"
-    assert by["金利上昇耐性 スコア"]["state"] == "unidentified"
-    assert "掲載しない" in by["金利上昇耐性 スコア"]["note"]
+    assert by["分配金の安定性 スコア"]["state"] == "unvalidated"          # 推定可だが検証で予測力なし
+    assert "予測力" in by["分配金の安定性 スコア"]["note"]
+    assert by["分配金の成長 スコア"]["state"] == "unidentified"
+    assert "掲載しない" in by["分配金の成長 スコア"]["note"]
+    assert by["金利上昇耐性 スコア"]["state"] == "ok"
     payload = build(_daily(), scores=_fake_scores())
     assert set(payload) == {"generated_at", "jgb10", "status", "scores"}
-    assert payload["scores"]["columns"] == ["q_ret", "q_grow"]
+    assert payload["scores"]["columns"] == ["q_ret", "q_rate"]
 
 
 def test_payload_exposes_only_the_connected_series():

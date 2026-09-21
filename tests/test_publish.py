@@ -5,7 +5,8 @@ import pandas as pd
 from jreit_score.features import OBJECTIVES, OUTCOME_COLS
 from jreit_score.ingest.jquants_store import Store
 from jreit_score.model import DEFAULT_CAUSES, cross_sectional_standardize, fit_objective_factors
-from jreit_score.publish import check_payload, quintiles, score_snapshot, snapshot_payload
+from jreit_score.publish import (PUBLISH_MIN_T, check_payload, publish_decision, quintiles,
+                                 score_snapshot, snapshot_payload)
 from jreit_score.validation import rolling_validation
 
 BETA = {"q_ret": {"nav_ratio": -0.5}, "q_stab": {"ltv": -0.6}, "q_grow": {"occupancy": 0.5},
@@ -75,6 +76,32 @@ def test_scores_are_standardized_and_ordered_like_the_model():
     assert z.corr(nav.reindex(z.index), method="spearman") < -0.5
     q = pd.Series({r["code"]: r["q_ret"]["q"] for r in payload["rows"]})
     assert q.corr(z, method="spearman") > 0.9
+
+
+def test_publish_decision_requires_estimation_and_validated_signal():
+    assert publish_decision("ok", {"ic_t": 4.0}) == (True, publish_decision("ok", {"ic_t": 4.0})[1])
+    assert publish_decision("ok", {"ic_t": 4.0})[0]
+    assert not publish_decision("ok", {"ic_t": PUBLISH_MIN_T - 0.01})[0]
+    assert not publish_decision("ok", {"ic_t": None})[0]
+    assert not publish_decision("weak", {"ic_t": 9.0})[0]
+    assert not publish_decision("no_signal", None)[0]
+
+
+def test_usable_but_unvalidated_objective_is_not_published():
+    """推定はできても時系列検証の IC が有意でない目的は列に出さない（実データの q_stab）."""
+    panel = _panel()
+    o = fit_objective_factors(panel)
+    ic, _ = rolling_validation(panel, horizon_periods=2, min_train_periods=6, objectives=OBJECTIVES)
+    ic = ic.copy()
+    ic["ic_composite_q_stab"] = [0.02, -0.01, 0.01, -0.02][:len(ic)] + [0.0] * max(0, len(ic) - 4)
+    last = panel["period"].max()
+    X = panel[panel["period"] == last][["code"] + DEFAULT_CAUSES].reset_index(drop=True)
+    payload = snapshot_payload(o, ic, X, {}, last, {})
+    check_payload(payload)
+    st = payload["objectives"]["q_stab"]
+    assert st["usable"] and not st["published"] and "予測力" in st["publish_reason"]
+    assert "q_stab" not in payload["columns"] and "q_stab" not in payload["rows"][0]
+    assert payload["objectives"]["q_ret"]["published"] and "q_ret" in payload["columns"]
 
 
 def test_unusable_objective_has_no_column_but_keeps_its_status():

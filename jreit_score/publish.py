@@ -2,6 +2,7 @@
 
 出すもの: 銘柄コード・銘柄名、目的別スコアの z 値（銘柄間で標準化）と五分位、
 モデルの係数 β̂（標準化データ上）、時系列検証の IC。
+掲載する目的は「推定可」かつ「時系列検証の IC の NW-t >= PUBLISH_MIN_T」のものだけ。
 出さないもの: 価格・分配金・BPS・時価総額・NAV 倍率などの生データと、その z 値。
 """
 from __future__ import annotations
@@ -17,6 +18,19 @@ from .validation import newey_west_t, rolling_validation
 
 ROW_KEYS_FIXED = {"code", "name"}          # 行に許す固定キー。残りは目的キーだけ
 CELL_KEYS = {"z", "q"}                     # 目的セルに許すキー
+PUBLISH_MIN_T = 2.0                        # 掲載基準: 時系列検証の IC の Newey–West t がこれ以上（決定 2026-09-21）
+
+
+def publish_decision(status: str, oos: dict | None) -> tuple[bool, str]:
+    """掲載するか. 推定できて（status ok）, かつ時系列検証で予測力が確認できた目的だけ."""
+    if status != "ok":
+        return False, "非掲載（推定できず）"
+    t = (oos or {}).get("ic_t")
+    if t is None:
+        return False, "非掲載（時系列検証の期数が足りず予測力を確認できず）"
+    if t < PUBLISH_MIN_T:
+        return False, f"非掲載（時系列検証で予測力が確認できず: IC の NW-t {t:.2f} < {PUBLISH_MIN_T:g}）"
+    return True, f"掲載（時系列検証の IC の NW-t {t:.2f} >= {PUBLISH_MIN_T:g}）"
 
 
 def _round(v, nd=3):
@@ -46,9 +60,14 @@ def quintiles(z: pd.Series) -> pd.Series:
 
 def snapshot_payload(o: ObjectiveFactors, ic: pd.DataFrame, X: pd.DataFrame, names: dict[str, str],
                      as_of: pd.Timestamp, fit: dict, objectives: dict[str, list[str]] = OBJECTIVES) -> dict:
-    """推定済みモデルと基準日の説明変数 X（z 化済み, NaN 無し）からスコア payload を作る."""
+    """推定済みモデルと基準日の説明変数 X（z 化済み, NaN 無し）からスコア payload を作る.
+
+    列に出すのは `publish_decision` を通った目的だけ（推定可 かつ 検証で予測力あり）。
+    """
     scores = o.predict_scores(X)
-    usable = [k for k in objectives if k in scores.columns]
+    oos = {k: oos_summary(ic, k) for k in objectives}
+    decisions = {k: publish_decision(o.factors[k].status, oos[k]) for k in objectives}
+    usable = [k for k in objectives if k in scores.columns and decisions[k][0]]
     zs, qs = {}, {}
     for k in usable:
         s = scores[k]
@@ -68,13 +87,15 @@ def snapshot_payload(o: ObjectiveFactors, ic: pd.DataFrame, X: pd.DataFrame, nam
     objs = {}
     for k, inds in objectives.items():
         fo = o.factors[k]
+        published, why = decisions[k]
         entry = {"label": OBJECTIVE_LABELS.get(k, k), "indicators": list(inds),
                  "status": fo.status, "status_label": OBJECTIVE_STATUS_LABEL[fo.status],
-                 "reason": fo.reason, "usable": fo.status == "ok"}
+                 "reason": fo.reason, "usable": fo.status == "ok",
+                 "published": published, "publish_reason": why}
         if fo.fitted is not None:
             entry["beta"] = {c: _round(fo.fitted.beta.get(c, np.nan)) for c in o.causes}
             entry["n"] = int(getattr(fo.fitted, "n", 0))
-        entry["oos"] = oos_summary(ic, k)
+        entry["oos"] = oos[k]
         objs[k] = entry
 
     return {
@@ -138,3 +159,6 @@ def check_payload(scores: dict, objectives: dict[str, list[str]] = OBJECTIVES) -
     for k, e in scores["objectives"].items():
         assert k in objectives and set(e["indicators"]) == set(objectives[k])
         assert e["status"] in OBJECTIVE_STATUS_LABEL
+        assert e["published"] == (k in scores["columns"]), k
+        if e["published"]:
+            assert e["usable"] and e["oos"]["ic_t"] is not None and e["oos"]["ic_t"] >= PUBLISH_MIN_T, k

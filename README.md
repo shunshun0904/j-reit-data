@@ -98,8 +98,9 @@ PYTHONPATH=. python tests/test_publish.py
 - `pages.yml`（手動実行）が財務省 CSV と J-Quants の store（cache）から `site/data.json` を生成する
 - 掲載するのは派生値だけ: 10 年債利回りの月末値、銘柄別スコアの z 値（掲載銘柄間で標準化）と
   五分位（5 が上位）、係数 β̂、時系列検証の IC。価格・分配金・BPS・時価総額・NAV 倍率は出さない
-- スコアは「モデル推定値」と明記し、識別できない目的は「識別不能・非掲載」と表示する。
-  売買推奨の表現はしない
+- 掲載するのは「推定可」かつ「時系列検証の IC の Newey–West t >= 2」の目的だけ
+  （`publish.PUBLISH_MIN_T`）。推定できない目的や検証で予測力が無い目的は非掲載と表示する
+- スコアは「モデル推定値」と明記し、売買推奨の表現はしない
 
 ## 実データの流れ
 - `run_real.build_panel(store, jgb10, periods)` が `features.build_outcomes` と
