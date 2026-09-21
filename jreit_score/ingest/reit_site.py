@@ -21,6 +21,9 @@ UA = "Mozilla/5.0 (compatible; jreit-score-prototype/0.1; personal research)"
 SOURCES = {"kdx": "https://www.kdx-reit.com/ja/portfolio/list.html"}
 NAME_KEYS = ("物件名", "物件名称", "名称")
 PRICE_KEYS = ("取得価格", "取得価額")
+APPRAISAL_KEYS = ("鑑定評価額", "鑑定 評価額", "期末算定価額", "鑑定")
+GFA_KEYS = ("延床面積",)
+DATE_KEYS = ("取得日",)
 TYPE_KEYS = ("用途", "アセットタイプ", "タイプ", "分類")
 AREA_KEYS = ("地域", "エリア", "所在地", "所在")
 POLICY_WORDS = ("利用規約", "サイトポリシー", "ご利用にあたって", "免責", "ご利用条件", "サイトのご利用")
@@ -90,8 +93,14 @@ def summarize(tables: list[pd.DataFrame]) -> None:
             continue
         df = pd.DataFrame({"name": t[name_c].astype(str), "price": t[price_c].map(to_number)})
         type_c, area_c = _col(t, TYPE_KEYS), _col(t, AREA_KEYS)
+        appr_c, gfa_c, date_c = _col(t, APPRAISAL_KEYS), _col(t, GFA_KEYS), _col(t, DATE_KEYS)
         df["type"] = t[type_c].astype(str) if type_c is not None else f"table{i}"
         df["area"] = t[area_c].astype(str).str[:6] if area_c is not None else ""
+        df["appraisal"] = t[appr_c].map(to_number) if appr_c is not None else float("nan")
+        df["gfa"] = t[gfa_c].map(to_number) if gfa_c is not None else float("nan")
+        df["acq_year"] = (pd.to_datetime(t[date_c].astype(str).str.extract(r"(\d{4}[./年]\d{1,2}[./月]\d{1,2})")[0]
+                                         .str.replace("年", "/").str.replace("月", "/").str.replace("日", ""),
+                                         errors="coerce").dt.year if date_c is not None else float("nan"))
         frames.append(df.dropna(subset=["price"]))
     if not frames:
         print("物件名と取得価格を持つ表が無い（列名の候補を増やす必要あり）")
@@ -109,8 +118,21 @@ def summarize(tables: list[pd.DataFrame]) -> None:
         a["share_%"] = (a["price"] / df["price"].sum() * 100).round(1)
         print("所在地（先頭6文字）別 上位:")
         print(a.to_string())
+    if df["appraisal"].notna().any():
+        a = df.dropna(subset=["appraisal"])
+        g2 = a.groupby("type").agg(price=("price", "sum"), appraisal=("appraisal", "sum"))
+        g2["appr/price"] = (g2["appraisal"] / g2["price"]).round(3)
+        tot = a["appraisal"].sum() / a["price"].sum()
+        print(f"鑑定評価額（表の単位）: 合計 {a['appraisal'].sum():,.0f}, 取得価格比 {tot:.3f}（{len(a)} 件）")
+        print(g2.sort_values("price", ascending=False).to_string())
+    if df["gfa"].notna().any():
+        print(f"延床面積の合計 {df['gfa'].sum():,.0f} ㎡（{df['gfa'].notna().sum()} 件）")
+    if df["acq_year"].notna().any():
+        y = df.dropna(subset=["acq_year"]).groupby(df["acq_year"].astype("Int64")).agg(n=("name", "size"), price=("price", "sum"))
+        print("取得年別（件数, 取得価格）:")
+        print(y.to_string())
     print("取得価格 上位 10 件:")
-    print(df.nlargest(10, "price")[["name", "type", "price"]].to_string(index=False))
+    print(df.nlargest(10, "price")[["name", "type", "price", "appraisal"]].to_string(index=False))
 
 
 if __name__ == "__main__":

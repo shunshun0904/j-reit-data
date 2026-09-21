@@ -131,7 +131,10 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     公開する data.json はジョブのログにも残す（公開物と同一。開発セッションは github.io と
     Actions の artifact 保存先に到達できないため、ログから取って描画確認する）
   - `fetch-jquants.yml` J-Quants の差分取得と cache 保存。出力は件数・期間・サイズのみ
-  - `probe-edinet.yml` EDINET API v2 の probe（タスク 6）。`EDINET_API_KEY` が必要
+  - `probe-edinet.yml` EDINET API v2 の probe（タスク 6）。`EDINET_API_KEY` が必要。
+    2026-09-21 時点で登録キー（長さ 36, 英数字以外を含む）が「invalid subscription key」で拒否され未通過
+  - `inspect-reit-site.yml` 投資法人サイトのポートフォリオ一覧の構造確認と要約（個人利用。KDX のみ実装）。
+    物件一覧そのものは出さず、用途・エリア別の件数と取得価格、鑑定評価額の合計、上位 10 件だけ出す
   - `inspect-price-history.yml` 1 銘柄の 20 年月次価格の確認（個人利用。Yahoo Finance の yfinance）。
     J-Quants の現プランは直近 10 年のみのため。ログには年ごとの要約と分位だけ、図は artifact（7 日）。
     stooq は JavaScript の確認ページが返り取れない（2026-09-21）。
@@ -225,7 +228,12 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
        書類取得は type=1（zip, XBRL）/2（PDF）/5（CSV）。物件表は XBRL のテキストブロック（HTML）
        にあるはずで、CSV（数値ファクト）には出ない見込み → HTML 表のパーサが要る。**推奨**
      - 各投資法人の IR サイト（ポートフォリオ一覧・個別物件データブック）: 57 通りの構造で非効率。
-       KDX は一覧・地図・データブックを公開している（`kdx-reit.com/ja/portfolio/`）
+       KDX は一覧・地図・データブックを公開している（`kdx-reit.com/ja/portfolio/`）。
+       **確認済み（2026-09-21, inspect-reit-site run #1）**: KDX の一覧ページは 1 表（347 行 × 10 列:
+       物件番号・用途・物件名称・エリア・所在地・取得日・取得価格(百万円)・鑑定評価額(百万円)・延床面積・
+       建築時期）で `pd.read_html` で読める。ただし「ご利用条件」に「事前の承諾なしに複製・配布・転用・
+       掲載・商業利用を禁止」とあるため、**公開ページへの転載には使えない**（個人利用の要約まで）。
+       公開する物件データの取得元は EDINET（公開開示）に限る
      - 第三者サービス（estie J-REIT, J-REIT Maps, REIT保有物件マップ(α), 不動産DB, JAPAN-REIT.COM）:
        データの再利用条件が不明または禁止 → 取得元にしない
    - ジオコーディング: 国土地理院 住所検索 API `https://msearch.gsi.go.jp/address-search/AddressSearch?q=`
