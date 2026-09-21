@@ -104,8 +104,14 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
    - 含意: rate_resilience の lookback 250 日と 12 か月の将来リターンを引くと、評価できる
      半期末は概ね 2017-12〜2025-06。rolling_validation の min_train_periods=8 だと
      out-of-sample は数期しか取れない
+   - **本番取得済み（2026-09-21, fetch-jquants run #3）**: 57 銘柄、価格 132,397 行
+     （2016-09-21〜2026-09-18）、DPU 1,074 行（2016-08-31〜2026-07-31）、失敗 0、所要 2分50秒、
+     parquet 計 416 KB。cache キー `jquants-v1-<run_id>` に保存。次回以降は差分のみ
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
-4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
+4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認。
+   価格・DPU・10年債は揃った。説明変数は J-Quants だけだと `nav_ratio`（BPS）と
+   `log_mcap`（MktCap）の2本で、`ltv` / `noi_yield` / `unrealized_gain` は
+   JAPAN-REIT.COM のスナップショット蓄積（タスク5）待ち
 5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積
    （生データはコミットしない）と、スコア算出後のダッシュボード掲載
 
