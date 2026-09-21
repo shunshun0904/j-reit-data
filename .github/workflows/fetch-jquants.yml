@@ -1,0 +1,68 @@
+# J-Quants から 57 銘柄の価格・DPU を差分取得し、Actions cache に保存する。
+#
+# 生データはコミットしない（J-Quants のデータは再配布不可）。保存先は cache（設計判断
+# 2026-09-21）。cache は同じキーでは上書きされないので、キーに run_id を含めて毎回
+# 新しいエントリとして保存し、restore-keys の前方一致で直近のものを復元する。
+# 7 日間参照が無いと消えるが、その場合は全件取り直すだけで壊れない。
+#
+# 出力は件数・期間・ファイルサイズのみ。レコードもキーも出さない。
+name: fetch-jquants
+
+on:
+  workflow_dispatch:
+    inputs:
+      codes:
+        description: "銘柄を絞る（動作確認用, 空なら全 57 銘柄）"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jquants-store
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: 差分取得ロジックの検証（取得前に通しておく）
+        run: |
+          PYTHONPATH=. python tests/test_jquants.py
+          PYTHONPATH=. python tests/test_jquants_store.py
+
+      - name: 直近の cache を復元
+        uses: actions/cache/restore@v4
+        with:
+          path: data/jquants
+          key: jquants-v1-${{ github.run_id }}
+          restore-keys: |
+            jquants-v1-
+
+      - name: 差分取得
+        env:
+          JQUANTS_API_KEY: ${{ secrets.JQUANTS_API_KEY }}
+          JQUANTS_API: ${{ secrets.JQUANTS_API }}
+          CODES: ${{ inputs.codes }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CODES" ]; then
+            PYTHONPATH=. python -m jreit_score.ingest.jquants_store --data data/jquants --codes $CODES
+          else
+            PYTHONPATH=. python -m jreit_score.ingest.jquants_store --data data/jquants
+          fi
+
+      - name: cache に保存（新しいエントリ）
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/jquants
+          key: jquants-v1-${{ github.run_id }}

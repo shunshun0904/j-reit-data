@@ -86,13 +86,17 @@ J-REIT 58銘柄について、3つの目的（将来リターン・分配金の�
     `JQUANTS_API_KEY` / `JQUANTS_API` のどちらかが必要
   - `pages.yml` GitHub Pages へのデプロイ。財務省 CSV から `site/data.json` を生成して公開する。
     公開前に「jgb10 以外の数値系列が無いこと」を検証する
+  - `fetch-jquants.yml` J-Quants の差分取得と cache 保存。出力は件数・期間・サイズのみ
 
 ## 次のタスク（優先順）
 1. DPU 履歴の取得元を決め直す。JAPAN-REIT.COM の銘柄ページは3期分しか無く使えない
    （候補: J-Quants V2 の分配金、TDnet/EDINET、haitoukabu.com。いずれも未確認）
 2. J-Quants の取得は確定・検証済み（58 銘柄で census 済み）。`fetch_all_dpu` と
    `fetch_prices` で全銘柄の価格・DPU を集め、`features.build_outcomes` に渡す。
-   **未決: 取得した生データの保存先**（コミット不可。Actions の artifact / cache / 外部ストレージ）
+   **決定（2026-09-21）: 生データは Actions cache に置く**（`ingest/jquants_store.py` +
+   `.github/workflows/fetch-jquants.yml`）。価格は銘柄ごとに保存済み最終日の翌日から差分、
+   DPU は毎回全件。cache のキーは run_id 込みで毎回新規保存、restore-keys で直近を復元。
+   7 日未参照で消えるが全件取り直すだけ。次: 取得した store を `features.build_outcomes` に渡す
 3. 完了（2026-09-20）。`ingest/jgb.py` で10年債利回りを取得できる（`fetch_jgb10_full`）
 4. 実データで `fit_with_sign_branch` → 判定結果（1因子/2因子）と適合度を確認
 5. 配線は完了（`pages.yml`）。残りは日次で JAPAN-REIT.COM スナップショット蓄積
@@ -124,6 +128,7 @@ PYTHONPATH=. python tests/test_ingest.py
 PYTHONPATH=. python tests/test_model.py
 PYTHONPATH=. python tests/test_jgb.py
 PYTHONPATH=. python tests/test_jquants.py
+PYTHONPATH=. python tests/test_jquants_store.py
 PYTHONPATH=. python tests/test_site.py
 ```
 
