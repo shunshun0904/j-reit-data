@@ -45,6 +45,8 @@ def causes_panel(prices: pd.DataFrame, dpu: pd.DataFrame, periods: list[pd.Times
     - close, mktcap: p 以前の最後の営業日の値
     - bps: 開示日 disc_date <= p の最後の決算の値（先読み防止）
     - nav_ratio = close / bps, log_mcap = log(mktcap)
+      nav_ratio は帳簿ベースの 1 口当たり純資産（決算短信サマリの BPS）で割ったもので PBR 相当。
+      一般に言う NAV 倍率（鑑定評価額ベース、含み損益込み）ではない。表示では「NAV倍率（簿価ベース）」と書く
     """
     need = {"code", "date", "close", "mktcap"}
     if not need <= set(prices.columns):

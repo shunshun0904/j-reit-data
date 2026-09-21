@@ -39,7 +39,7 @@
   参考として残すが、DPU は `jquants.py` から取る
 - `jreit_score/ingest/jquants.py` J-Quants V2 から価格（`/equities/bars/daily`）と決算短信サマリ
   （`/fins/summary`。DPU・BPS）を取得する。`jquants_store.py` が Actions cache に差分保存し、
-  `jquants_panel.py` が説明変数（NAV 倍率・対数時価総額）を as-of で作る
+  `jquants_panel.py` が説明変数（NAV倍率（簿価ベース: 終値 ÷ BPS）・対数時価総額）を as-of で作る
   （API キーは GitHub Secrets の `JQUANTS_API_KEY` または `JQUANTS_API`）
 - `jreit_score/ingest/jgb.py` 財務省「国債金利情報」CSV から国債利回りを取得する。
   和暦（`S49.9.24` / `令和6年4月1日`）と西暦の両方、全角の年限列、欠損記号 `-` を吸収する。

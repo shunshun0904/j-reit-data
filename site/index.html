@@ -315,7 +315,8 @@ function renderScores(sc) {
     ? `（説明変数が揃わない ${f.unscored_codes.join(", ")} は除外）` : "";
   sub.textContent =
     `基準日 ${sc.as_of}（価格の最終営業日時点の財務指標）。推定期間 ${(f.periods || []).join("〜")}` +
-    `（${f.n_periods} 期・${f.n_rows_complete} 行）。説明変数: ${(sc.causes || []).join(", ")}。` +
+    `（${f.n_periods} 期・${f.n_rows_complete} 行）。説明変数: ` +
+    (sc.causes || []).map(c => `${CAUSE_NAME[c] || c}（${CAUSE_DEF[c] || c}）`).join("、") + `。` +
     `掲載 ${f.scored} 銘柄${uns}。`;
 
   // 目的ごとの判定と検証結果
@@ -323,7 +324,7 @@ function renderScores(sc) {
     const oos = o.oos || {};
     const ver = oos.ic == null ? "時系列検証: 使える期なし"
       : `時系列検証 IC ${fz(oos.ic)}（NW-t ${oos.ic_t}、${oos.n_periods} 期）、五分位スプレッド ${fz(oos.spread)}`;
-    const beta = o.beta ? Object.entries(o.beta).map(([c, v]) => `${c} ${fz(v)}`).join(", ") : "";
+    const beta = o.beta ? Object.entries(o.beta).map(([c, v]) => `${CAUSE_NAME[c] || c} ${fz(v)}`).join(", ") : "";
     const state = o.published ? `<span class="state">掲載</span>`
       : `<span class="state">${esc(o.publish_reason || "非掲載")}</span>` + (o.usable ? "" : `: ${esc(o.status_label)}`);
     return `<div class="obj"><b>${esc(o.label)}</b>${state}<br>指標: ${o.indicators.join(", ")}` +
@@ -365,7 +366,9 @@ function drawScoreTable(sc) {
     }).join("") + `</tr>`).join("");
 }
 
-const CAUSE_NAME = { nav_ratio: "NAV倍率", log_mcap: "時価総額" };
+// nav_ratio は 終値 ÷ 1口当たり純資産（BPS, 帳簿ベース）。鑑定評価ベースの一般的な NAV 倍率ではない
+const CAUSE_NAME = { nav_ratio: "NAV倍率（簿価ベース）", log_mcap: "時価総額" };
+const CAUSE_DEF = { nav_ratio: "終値 ÷ 1口当たり純資産（BPS, 帳簿ベース。鑑定評価ベースではない）", log_mcap: "時価総額の対数" };
 const CAUSE_ADJ = { nav_ratio: ["高め", "低め"], log_mcap: ["大きめ", "小さめ"] };
 
 function renderMap(sc) {

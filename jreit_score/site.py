@@ -61,7 +61,8 @@ BASE_STATUS = [
     {"item": "分配金（DPU）", "state": "internal",
      "note": "J-Quants V2 の決算短信サマリから取得済みでモデル推定に使用。掲載しない"},
     {"item": "財務指標", "state": "pending",
-     "note": "現在の説明変数は NAV 倍率と時価総額の2本。LTV 等は JAPAN-REIT.COM の日次蓄積待ち"},
+     "note": "現在の説明変数は NAV倍率（簿価ベース: 終値 ÷ 1口当たり純資産。鑑定評価ベースではない）と"
+             "時価総額の2本。LTV 等は JAPAN-REIT.COM の日次蓄積待ち"},
 ]
 
 
